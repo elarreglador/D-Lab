@@ -45,3 +45,20 @@ network:
 ## Validez de la Configuración
 
 La configuración está activa y permanente (`valid_lft forever`), lo que significa que la IP estática se mantendrá después de cada reinicio del equipo.
+
+# SSH
+
+agregamos ambos equipos en .ssh/config 
+
+```
+cat .ssh/config 
+Host D1
+    HostName 192.168.1.11
+    User elarreglador
+
+Host D2
+    HostName 192.168.1.12
+    User elarreglador
+```
+
+Esto facilitara la conexion entre ellos

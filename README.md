@@ -174,7 +174,7 @@ nvme0n1         238,5G
 **Objetivo**: Establecer base de red y seguridad
 
 - [x] Configurar red estática en D1 (192.168.1.11)
-- [ ] Configurar red estática en D2 (192.168.1.12)
+- [x] Configurar red estática en D2 (192.168.1.12)
 - [ ] Validar conectividad D1 ↔ D2 (ping, ssh)
 - [ ] Actualizar SO en ambos nodos (`apt update && apt upgrade`)
 - [ ] Sincronizar hora NTP en ambos nodos
