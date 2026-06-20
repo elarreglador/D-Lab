@@ -48,7 +48,7 @@ La configuración está activa y permanente (`valid_lft forever`), lo que signif
 
 # SSH
 
-agregamos ambos equipos en .ssh/config 
+agregamos ambos equipos en .ssh/config tanto en D1 como en D2
 
 ```
 cat .ssh/config 
@@ -62,3 +62,61 @@ Host D2
 ```
 
 Esto facilitara la conexion entre ellos
+
+# Cambio de puerto SSH (22 -> 9622)
+
+Para evitar ataques de bots basicos pasamos del puerto 22 al 9622 (o cualquier otro) tanto D1 como D2i
+
+```
+sudo sed -i 's/#Port 22/Port 9622/' /etc/ssh/sshd_config
+sudo systemctl stop ssh.socket
+sudo systemctl disable ssh.socket
+sudo systemctl restart ssh
+sudo ss -tulpn | grep ssh
+```
+
+Recuerda atcualizar .ssh/config indicando el nuevo puerto de conexion
+
+```
+Host D1
+    HostName 192.168.1.11
+    User elarreglador
+    Port 9622
+
+Host D2
+    HostName 192.168.1.12
+    User elarreglador
+    Port 9622
+```
+
+# Fail2Ban
+
+Instalamos fail2ban para que en caso de ataque de fuerza bruta bloqueemos al atacante por un tiempo
+
+```
+sudo apt install fail2ban -y
+```
+
+para configurar fail2ban y que proteja el nuevo puerto SSH (9622), debemos crear un archivo de configuración local.
+
+```
+sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
+```
+
+editamos /etc/fail2ban/jail.local dejando los campos asi:
+
+```
+sudo nano /etc/fail2ban/jail.local
+```
+
+```
+[sshd]
+enabled = true
+port = 9622
+```
+
+Reiniciamos fail2ban
+
+```
+sudo systemctl restart fail2ban
+```

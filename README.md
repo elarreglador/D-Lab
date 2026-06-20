@@ -150,23 +150,6 @@ nvme0n1         238,5G
 
 ---
 
-## Documentación
-
-### Referencias de Consulta
-
-1. **[00-Requisitos.md](./00-Requisitos.md)**
-   - Requisitos técnicos detallados (hardware, software, seguridad)
-   - Limitaciones actuales del sistema
-   - Recomendaciones para optimización
-
-2. **[01-Network.md](./01-Network.md)**
-   - Configuración actual de red (D1)
-   - Detalles de IP estática
-   - Configuración netplan
-   - Servidores DNS
-
----
-
 ## Plan de Implementación
 
 ### Fase 1️ | Preparación de Infraestructura
@@ -175,11 +158,13 @@ nvme0n1         238,5G
 
 - [x] Configurar red estática en D1 (192.168.1.11)
 - [x] Configurar red estática en D2 (192.168.1.12)
-- [ ] Validar conectividad D1 ↔ D2 (ping, ssh)
-- [ ] Actualizar SO en ambos nodos (`apt update && apt upgrade`)
-- [ ] Sincronizar hora NTP en ambos nodos
-- [ ] Cambiar puerto SSH (22 → custom)
-- [ ] Implementar fail2ban en ambos nodos
+- [x] Validar conectividad D1 ↔ D2 (ping, ssh)
+- [x] Actualizar SO en ambos nodos (`apt update && apt upgrade`)
+- [x] Sincronizar hora NTP en ambos nodos:
+	sudo timedatectl set-ntp on
+	timedatectl status
+- [x] Cambiar puerto SSH (22 → custom)
+- [x] Implementar fail2ban en ambos nodos
 - [ ] Implementar VPN Wireguard para comunicación segura interna
 
 **Duración Estimada**: 2-3 horas
