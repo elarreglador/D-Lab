@@ -120,3 +120,76 @@ Reiniciamos fail2ban
 ```
 sudo systemctl restart fail2ban
 ```
+
+# WireGuard VPN
+
+## Configuración de Cliente WireGuard
+
+Se ha instalado y configurado WireGuard para establecer una conexión VPN segura.
+
+## Instalación
+
+```bash
+sudo apt install wireguard wireguard-tools -y
+```
+
+## Configuración por Equipo
+
+Para D1, utiliza la siguiente configuración en `/etc/wireguard/wg0.conf`:
+
+```ini
+[Interface]
+PrivateKey = <PRIVATE_KEY_D1>
+Address = 10.8.0.11/32,fd42:42:42::11/128
+DNS = 10.8.0.1,1.8.0.1
+
+[Peer]
+PublicKey = <SERVER_PUBLIC_KEY_OLD>
+PresharedKey = <PRESHARED_KEY_D1>
+Endpoint = 82.223.50.169:51820
+AllowedIPs = 0.0.0.0/0,::/0
+```
+
+Para D2, la configuración es idéntica excepto por la dirección de la interfaz:
+- Address = `10.8.0.12/32,fd42:42:42::12/128`
+
+## Aplicación de la Configuración
+
+```bash
+# Crear directorio si no existe
+sudo mkdir -p /etc/wireguard
+
+# Copiar la configuración
+sudo cp wg0-client-d1.conf /etc/wireguard/wg0.conf
+# O para D2, copiar la versión correspondiente:
+# sudo cp wg0-client-d2.conf /etc/wireguard/wg0.conf
+
+# Establecer permisos
+sudo chmod 600 /etc/wireguard/wg0.conf
+
+# Activar la interfaz
+sudo wg-quick up wg0
+
+# Habilitar en el arranque
+sudo systemctl enable wg-quick@wg0
+```
+
+## Verificación
+
+```bash
+# Verificar la interfaz WireGuard
+sudo wg show
+
+# Verificar direcciones IP asignadas
+ip addr show wg0
+
+# Verificar la IP pública del servidor VPN
+curl ifconfig.me
+```
+
+## Desactivación (si es necesario)
+
+```bash
+sudo wg-quick down wg0
+sudo systemctl disable wg-quick@wg0
+```

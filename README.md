@@ -165,7 +165,7 @@ nvme0n1         238,5G
 	timedatectl status
 - [x] Cambiar puerto SSH (22 → custom)
 - [x] Implementar fail2ban en ambos nodos
-- [ ] Implementar VPN Wireguard para comunicación segura interna
+- [x] Implementar VPN Wireguard para comunicación segura interna
 
 **Duración Estimada**: 2-3 horas
 
