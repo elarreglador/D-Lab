@@ -11,7 +11,7 @@ Proyecto de virtualización y orquestación de contenedores usando LXC (Linux Co
 - [Tecnologías](#tecnologías)
 - [Documentación](#documentación)
 - [Plan de Implementación](#plan-de-implementación)
-- [Requisitos Pendientes](#requisitos-pendientes-críticos)
+- [Estado del Proyecto](#estado-del-proyecto)
 
 ---
 
@@ -169,274 +169,305 @@ nvme0n1         238,5G
 
 ## Plan de Implementación
 
-Plan progresivo unificado de instalación y desarrollo del cluster.
+### Fase 1️ | Preparación de Infraestructura
 
-### **Fase 1: Preparación Hardware (CRÍTICA)**
+**Objetivo**: Establecer base de red y seguridad
 
-*Prerequisito antes de cualquier otra tarea*
+- [x] Configurar red estática en D1 (192.168.1.11)
+- [ ] Configurar red estática en D2 (192.168.1.12)
+- [ ] Validar conectividad D1 ↔ D2 (ping, ssh)
+- [ ] Actualizar SO en ambos nodos (`apt update && apt upgrade`)
+- [ ] Sincronizar hora NTP en ambos nodos
+- [ ] Cambiar puerto SSH (22 → custom)
+- [ ] Implementar fail2ban en ambos nodos
+- [ ] Implementar VPN Wireguard para comunicación segura interna
 
-- [ ] **Ampliar RAM en D1 y D2 a mínimo 8GB** ⚠️ BLOQUEANTE
-  - Actual: 4GB (insuficiente)
-  - Mínimo: 8GB
-  - Ideal: 16GB
-- [ ] Verificar conectividad Ethernet en ambos nodos
-- [ ] Validar UPS y disponibilidad de energía continua
-- [ ] Realizar pruebas de estrés de hardware (stress-ng)
+**Duración Estimada**: 2-3 horas
 
-### **Fase 2: Configuración Base de Red**
+---
 
-- [ ] Configurar IP estática en D2 (siguiendo modelo en [01-Network.md](./01-Network.md))
-  - Rango: 192.168.1.X/24
-  - Puerta de enlace: 192.168.1.1
-  - DNS: 8.8.8.8, 8.8.4.4
-- [ ] Validar conectividad entre D1 ↔ D2 (ping, traceroute)
-- [ ] Actualizar SO en D1: `apt update && apt upgrade`
-- [ ] Actualizar SO en D2: `apt update && apt upgrade`
-- [ ] Sincronizar hora en ambos nodos (NTP)
+### Fase 2 | Infraestructura LXC y Containerización
 
-### **Fase 3: Seguridad Base**
+**Objetivo**: Establecer contenedores base para Kubernetes
 
-- [ ] Cambiar puerto SSH en D1 (22 → puerto custom)
-- [ ] Cambiar puerto SSH en D2 (22 → puerto custom)
-- [ ] Implementar fail2ban en D1
-- [ ] Implementar fail2ban en D2
-- [ ] Generar y copiar claves SSH entre nodos (sin contraseña)
-- [ ] Configurar firewall básico en D1
-- [ ] Configurar firewall básico en D2
-
-### **Fase 4: Infraestructura LXC**
-
-- [ ] Instalar LXC/LXD en D1
+- [ ] Instalar LXC/LXD en D1 y D2
   - `apt install lxd`
   - `lxd init` (configuración interactiva)
-- [ ] Instalar LXC/LXD en D2
-  - `apt install lxd`
-  - `lxd init` (configuración interactiva)
-- [ ] Configurar bridge de red `lxdbr0` en D1
-- [ ] Configurar bridge de red `lxdbr0` en D2
-- [ ] Crear contenedor LXC con Ubuntu 22.04 LTS en D1
-  - Nombre: `k8s-master`
-  - IP: 192.168.1.12 (estática dentro del contenedor)
-- [ ] Crear contenedor LXC con Ubuntu 22.04 LTS en D2
-  - Nombre: `k8s-worker`
-  - IP: 192.168.1.13 (estática dentro del contenedor)
-- [ ] Validar conectividad D1 → contenedor D1
-- [ ] Validar conectividad D2 → contenedor D2
-- [ ] Validar conectividad contenedor D1 ↔ contenedor D2
+- [ ] Crear bridge de red `lxdbr0` en ambos nodos
+- [ ] Crear contenedor `k8s-master` en D1
+  - Imagen: Ubuntu 22.04 LTS
+  - IP estática: 192.168.1.12
+  - RAM: 3GB mínimo, 6GB ideal
+- [ ] Crear contenedor `k8s-worker` en D2
+  - Imagen: Ubuntu 22.04 LTS
+  - IP estática: 192.168.1.13
+  - RAM: 2GB mínimo, 4GB ideal
+- [ ] Validar conectividad entre contenedores
+- [ ] Instalar dependencias base en ambos contenedores
 
-### **Fase 5: Runtime de Contenedores (containerd)**
+**Prerequisitos**: Fase 1 completada, RAM ampliada a 8GB
 
-*Ejecutar en ambos contenedores: k8s-master y k8s-worker*
+**Duración Estimada**: 1-2 horas
 
-- [ ] Instalar dependencias en k8s-master y k8s-worker
+---
+
+### Fase 3️ | Runtime de Contenedores
+
+**Objetivo**: Instalar y configurar containerd
+
+Ejecutar en `k8s-master` y `k8s-worker`:
+
+- [ ] Instalar dependencias
   - `apt install curl wget gnupg2 apt-transport-https ca-certificates`
-- [ ] Instalar containerd en k8s-master
+- [ ] Instalar containerd.io
   - `apt install containerd.io`
+- [ ] Generar configuración default
   - `mkdir -p /etc/containerd`
   - `containerd config default | tee /etc/containerd/config.toml`
+- [ ] Reiniciar servicio
   - `systemctl restart containerd`
-- [ ] Instalar containerd en k8s-worker
-  - (Mismo procedimiento que en k8s-master)
-- [ ] Validar estado de containerd en ambos contenedores
+- [ ] Validar estado
   - `systemctl status containerd`
-- [ ] Probar imagen básica: `crictl pull alpine`
+  - `crictl pull alpine` (prueba)
 
-### **Fase 6: Kubernetes Base**
+**Prerequisitos**: Fase 2 completada
 
-*Ejecutar en ambos contenedores: k8s-master y k8s-worker*
+**Duración Estimada**: 30 minutos
 
-- [ ] Añadir repositorio Kubernetes en k8s-master
-  - `curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -`
-  - `apt-add-repository "deb http://apt.kubernetes.io/ kubernetes-xenial main"`
-- [ ] Añadir repositorio Kubernetes en k8s-worker (mismo procedimiento)
-- [ ] Instalar kubeadm, kubelet, kubectl en k8s-master
+---
+
+### Fase 4️ | Instalación de Kubernetes
+
+**Objetivo**: Instalar componentes de K8S
+
+Ejecutar en `k8s-master` y `k8s-worker`:
+
+- [ ] Añadir repositorio de Kubernetes
+  ```bash
+  curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+  apt-add-repository "deb http://apt.kubernetes.io/ kubernetes-xenial main"
+  ```
+- [ ] Instalar componentes
   - `apt install kubeadm kubelet kubectl`
-  - `apt-mark hold kubeadm kubelet kubectl` (prevenir actualizaciones automáticas)
-- [ ] Instalar kubeadm, kubelet, kubectl en k8s-worker
-  - (Mismo procedimiento que k8s-master)
-- [ ] Deshabilitar swap en k8s-master
-  - `swapoff -a` (temporal)
-  - Editar `/etc/fstab` (permanente)
-- [ ] Deshabilitar swap en k8s-worker (mismo procedimiento)
+- [ ] Prevenir actualizaciones automáticas
+  - `apt-mark hold kubeadm kubelet kubectl`
+- [ ] Deshabilitar swap (permanentemente en `/etc/fstab`)
+  - `swapoff -a`
+- [ ] Cargar módulos de kernel necesarios
+  - `modprobe br_netfilter`
+  - `sysctl -w net.ipv4.ip_forward=1`
 
-### **Fase 7: Inicializar Control-Plane**
+**Prerequisitos**: Fase 3 completada
 
-*Ejecutar solo en k8s-master*
+**Duración Estimada**: 30 minutos
 
-- [ ] Inicializar control-plane con kubeadm
+---
+
+### Fase 5️ | Control-Plane
+
+**Objetivo**: Inicializar cluster Kubernetes
+
+Ejecutar solo en `k8s-master`:
+
+- [ ] Inicializar control-plane
   ```bash
   kubeadm init \
     --pod-network-cidr=10.244.0.0/16 \
     --apiserver-advertise-address=192.168.1.12
   ```
-- [ ] Guardar token de unión (salida del comando anterior)
-- [ ] Configurar kubeconfig para usuario actual
+- [ ] Copiar kubeconfig
   ```bash
   mkdir -p $HOME/.kube
   sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
   sudo chown $(id -u):$(id -g) $HOME/.kube/config
   ```
-- [ ] Validar acceso a cluster: `kubectl cluster-info`
-- [ ] Verificar nodos: `kubectl get nodes` (solo master visible)
+- [ ] Guardar token de unión (para Fase 6)
+  - `kubeadm token create --print-join-command`
+- [ ] Validar acceso a cluster
+  - `kubectl cluster-info`
+  - `kubectl get nodes` (solo master visible)
 
-### **Fase 8: Configurar CNI (Network Plugin)**
+**Prerequisitos**: Fase 4 completada
 
-*Ejecutar solo en k8s-master*
+**Duración Estimada**: 15 minutos
 
-- [ ] Instalar Flannel como CNI
-  - `kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml`
-- [ ] Verificar pods de Flannel: `kubectl get pods -n kube-flannel`
-- [ ] Esperar a que todos los pods de Flannel estén en estado `Running`
-- [ ] Verificar que master esté listo: `kubectl get nodes` (debe mostrar `Ready`)
+---
 
-*Alternativa: usar Calico para producción*
-- [ ] Opcionalmente instalar Calico
-  - `kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.24.1/manifests/tigera-operator.yaml`
+### Fase 6️ | Network Plugin (CNI)
 
-### **Fase 9: Unir Worker al Cluster**
+**Objetivo**: Configurar red entre pods
 
-*Ejecutar solo en k8s-worker*
+Ejecutar solo en `k8s-master`:
 
-- [ ] Obtener comando de unión del master
-  - Desde k8s-master: `kubeadm token create --print-join-command`
-- [ ] Ejecutar comando de unión en k8s-worker
+- [ ] Instalar Flannel (opción simple)
+  ```bash
+  kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+  ```
+- [ ] Verificar pods de red
+  - `kubectl get pods -n kube-flannel`
+- [ ] Esperar a que todos estén en `Running`
+- [ ] Verificar que master esté `Ready`
+  - `kubectl get nodes` (debe mostrar `Ready`)
+
+**Alternativa**: Calico para producción
+  ```bash
+  kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.24.1/manifests/tigera-operator.yaml
+  ```
+
+**Prerequisitos**: Fase 5 completada
+
+**Duración Estimada**: 5-10 minutos
+
+---
+
+### Fase 7️ | Unir Worker
+
+**Objetivo**: Incorporar segundo nodo al cluster
+
+Ejecutar solo en `k8s-worker`:
+
+- [ ] Ejecutar comando de unión (obtenido en Fase 5)
   ```bash
   kubeadm join 192.168.1.12:6443 \
     --token <TOKEN> \
     --discovery-token-ca-cert-hash sha256:<HASH>
   ```
-- [ ] Validar desde k8s-master: `kubectl get nodes`
-  - Debe mostrar 2 nodos (master y worker)
-- [ ] Esperar a que ambos nodos estén en estado `Ready`
+- [ ] Esperar sincronización (2-3 minutos)
+- [ ] Validar desde `k8s-master`
+  - `kubectl get nodes` (debe mostrar 2 nodos)
+  - `kubectl get pods -A` (verificar pods del sistema)
 
-### **Fase 10: Validación de Cluster**
+**Prerequisitos**: Fase 6 completada
 
-*Ejecutar en k8s-master*
+**Duración Estimada**: 5 minutos
 
-- [ ] Verificar nodos: `kubectl get nodes -o wide`
-- [ ] Verificar pods del sistema: `kubectl get pods -A`
-- [ ] Verificar servicios: `kubectl get svc -A`
-- [ ] Desplegar aplicación de prueba (nginx)
+---
+
+### Fase 8 ️| Almacenamiento Persistente
+
+**Objetivo**: Configurar volúmenes persistentes
+
+- [ ] Particionar disco mecánico en D1
+  - `lsblk` (identificar sda)
+  - `fdisk /dev/sda` (crear partición ext4)
+  - `mkfs.ext4 /dev/sda1`
+  - Montar en `/mnt/data-d1`
+- [ ] Particionar disco mecánico en D2 (mismo procedimiento)
+  - Montar en `/mnt/data-d2`
+- [ ] Instalar local-path-provisioner en cluster
+  ```bash
+  kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
+  ```
+- [ ] Crear StorageClass personalizado
+- [ ] Validar con PVC de prueba
+
+**Prerequisitos**: Fase 7 completada
+
+**Duración Estimada**: 1-2 horas
+
+---
+
+### Fase 9️ | Despliegues de Prueba
+
+**Objetivo**: Validar funcionamiento básico del cluster
+
+- [ ] Desplegar Nginx de prueba
   ```bash
   kubectl create deployment nginx --image=nginx
   kubectl expose deployment nginx --port=80 --type=LoadBalancer
   ```
-- [ ] Verificar despliegue: `kubectl get deployments`
-- [ ] Verificar pods: `kubectl get pods`
-- [ ] Acceder a la aplicación (obtener IP y puerto)
-- [ ] Validar distribución entre nodos
+- [ ] Verificar distribución entre nodos
+  - `kubectl get pods -o wide`
+- [ ] Probar persistencia
+  - Desplegar StatefulSet con PVC
+  - Verificar que datos persisten tras reinicio
+- [ ] Validar logs y eventos
+  - `kubectl logs <pod>`
+  - `kubectl describe pod <pod>`
 
-### **Fase 11: Configuración de Seguridad Avanzada**
+**Prerequisitos**: Fase 8 completada
 
-- [ ] Configurar firewall en D1 para puertos K8S
-  - 6443 (API Server)
-  - 10250 (kubelet)
-  - 2379-2380 (etcd)
-- [ ] Configurar firewall en D2 para puertos K8S
-  - 10250 (kubelet)
-- [ ] Implementar RBAC (Role-Based Access Control)
-  - Crear roles personalizados según necesidad
-  - Crear bindings de roles
-- [ ] Configurar backups de etcd en k8s-master
+**Duración Estimada**: 30 minutos
+
+---
+
+### Fase 10 | Seguridad Avanzada
+
+**Objetivo**: Implementar RBAC y políticas de seguridad
+
+- [ ] Configurar RBAC
+  - Crear roles personalizados
+  - Crear RoleBindings
+- [ ] Implementar NetworkPolicies
+- [ ] Configurar Pod Security Standards
+- [ ] Habilitar auditoría en API Server
+- [ ] Configurar backups de etcd
   ```bash
-  ETCDCTL_API=3 etcdctl --endpoints=127.0.0.1:2379 snapshot save backup.db
+  ETCDCTL_API=3 etcdctl snapshot save backup.db
   ```
 
-### **Fase 12: Almacenamiento Persistente**
+**Prerequisitos**: Fase 9 completada
 
-- [ ] Particionar disco mecánico en D1
-  - Usar disco sda (465.8G sin formato)
-  - Crear partición ext4
-- [ ] Particionar disco mecánico en D2
-  - (Mismo procedimiento que D1)
-- [ ] Configurar local-path-provisioner (solución simple)
+**Duración Estimada**: 2 horas
+
+---
+
+### Fase 1️1️| Nginx Ingress Controller
+
+**Objetivo**: Configurar enrutamiento avanzado de tráfico
+
+- [ ] Instalar Nginx Ingress Controller
   ```bash
-  kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
+  kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
   ```
-- [ ] Crear PersistentVolume (PV) en D1
-- [ ] Crear PersistentVolume (PV) en D2
-- [ ] Crear StorageClass para local-path
-- [ ] Probar PVC con aplicación de prueba
+- [ ] Crear Ingress resources
+- [ ] Configurar certificados TLS (opcional: cert-manager)
+- [ ] Validar enrutamiento de múltiples servicios
 
-### **Fase 13: Conectividad VPN (wireguard)**
+**Prerequisitos**: Fase 10 completada
 
-- [ ] Instalar wireguard en D1
-  - `apt install wireguard wireguard-tools`
-- [ ] Instalar wireguard en D2
-  - `apt install wireguard wireguard-tools`
-- [ ] Generar claves privadas y públicas en D1
-- [ ] Generar claves privadas y públicas en D2
-- [ ] Configurar interfaz wg0 en D1
-- [ ] Configurar interfaz wg0 en D2
-- [ ] Habilitar forwarding de IP en D1
-- [ ] Habilitar forwarding de IP en D2
-- [ ] Validar conectividad sobre wireguard
-- [ ] Integrar wireguard con K8S (opcional, si se requiere)
+**Duración Estimada**: 1-2 horas
 
-### **Fase 14: Monitoreo y Observabilidad**
+---
 
-- [ ] Instalar Prometheus en el cluster
-  - Crear namespace: `kubectl create namespace monitoring`
+### Fase 1️2️ | Monitoreo y Observabilidad
+
+**Objetivo**: Implementar stack de monitoreo
+
+- [ ] Instalar Prometheus
+  - Crear namespace `monitoring`
   - Desplegar Prometheus
-- [ ] Instalar Grafana en el cluster
-  - Configurar datasources (Prometheus)
+  - Configurar scrape targets
+- [ ] Instalar Grafana
+  - Conectar datasource Prometheus
   - Importar dashboards predefinidos
-- [ ] Instalar node-exporter en ambos nodos
-- [ ] Configurar alertas en Prometheus
-- [ ] Crear dashboards personalizados en Grafana
-- [ ] Implementar ELK stack para logs (opcional)
-  - Elasticsearch
-  - Logstash
-  - Kibana
+- [ ] Instalar AlertManager
+- [ ] Instalar node-exporter en nodos host
+- [ ] Crear alertas personalizadas
 
-### **Fase 15: Mejoras de Rendimiento y Escalabilidad**
+**Prerequisitos**: Fase 11 completada
 
-- [ ] Ampliar RAM a 16GB en D1 (si es posible)
-- [ ] Ampliar RAM a 16GB en D2 (si es posible)
-- [ ] Optimizar configuración de containerd
-- [ ] Ajustar límites de recursos en kubelet
-- [ ] Implementar auto-scaling horizontal (HPA)
-- [ ] Implementar auto-scaling vertical (VPA)
-- [ ] Configurar pod disruption budgets
-
-### **Fase 16: Producción y Mantenimiento**
-
-- [ ] Documentar configuración final
-- [ ] Crear runbooks de operación
-- [ ] Implementar política de backups (daily)
-- [ ] Establecer plan de actualización de K8S
-- [ ] Crear alertas para eventos críticos
-- [ ] Implementar auditoría y logging
-- [ ] Planificar estrategia de disaster recovery
-- [ ] Agregar tercer nodo (si se requiere alta disponibilidad)
+**Duración Estimada**: 3-4 horas
 
 ---
 
-## Requisitos Pendientes (Críticos)
+### Fase 1️️3 | Resiliencia y Alta Disponibilidad
 
-Consultar [00-Requisitos.md](./00-Requisitos.md) para detalles completos.
+**Objetivo**: Mejorar tolerancia a fallos
 
-**Bloqueantes para comenzar:**
+**Nota**: Requiere ampliación RAM a 16GB y/o adición de D3
 
-1. ⚠️ **Ampliar RAM a 8GB mínimo** - CRÍTICO, bloqueante para Fase 1
-2. **Configurar IP estática en D2** - Requerido para Fase 2
+- [ ] Considerar agregar tercer nodo (D3) para HA
+- [ ] Replicar etcd (3 nodos mínimo)
+- [ ] Configurar Longhorn para almacenamiento distribuido (futuro)
+- [ ] Implementar Pod Disruption Budgets
+- [ ] Crear estrategia de disaster recovery
 
-**Recomendados antes de Fase 4:**
+**Prerequisitos**: Fase 12 completada, hardware mejorado
 
-3. Instalar herramientas de diagnóstico (stress-ng, iperf)
-4. Validar estabilidad de red y hardware
-
----
-
-## Estado del Proyecto
-
-**Última actualización**: 2026-06-20
-**Estado**: Fase de Configuración Inicial
-**Nodos Operacionales**: D1 parcialmente configurado
-**Bloqueante Crítico**: Ampliación RAM (Fase 1)
+**Duración Estimada**: Variable (depende de decisiones arquitectónicas)
 
 ---
-
-## Contacto y Contribuciones
+# Contacto y Contribuciones
 
 Este proyecto es parte del laboratorio de desarrollo (D-Lab) para investigación en infraestructura de contenedores y Kubernetes.

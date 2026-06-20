@@ -104,9 +104,8 @@ Para el checklist de implementación, consultar [README.md](./README.md#guía-de
 ## Requisitos de Seguridad
 
 ### SSH
-- [ ] Cambiar puerto por defecto (22)
-- [ ] Implementar fail2ban para prevenir ataques de fuerza bruta
-- [ ] Usar claves SSH en lugar de contraseñas
+- Cambiar puerto por defecto (22)
+- Implementar fail2ban para prevenir ataques de fuerza bruta
 
 ### Certificados TLS
 - Necesarios para comunicación segura entre componentes de K8S
@@ -133,13 +132,13 @@ Para el checklist de implementación, consultar [README.md](./README.md#guía-de
 ## Requisitos Pendientes (del Roadmap)
 
 ### Configuración de Red
-- [ ] Asignar IP estática en D2 (pendiente)
-- [ ] Configurar netplan en ambos nodos de forma consistente
-- [ ] Agregar equipos a VPN wireguard
+- Asignar IP estática en D2 (pendiente)
+- Configurar netplan en ambos nodos de forma consistente
+- Agregar equipos a VPN wireguard
 
 ### Hardware
-- [ ] Ampliación de RAM a mínimo 8GB, idealmente 16GB por nodo
-- [ ] Considerar agregar un tercer equipo físico para mayor resiliencia
+- Ampliación de RAM a mínimo 8GB, idealmente 16GB por nodo
+- Considerar agregar un tercer equipo físico para mayor resiliencia
 
 ---
 
