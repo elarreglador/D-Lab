@@ -154,10 +154,11 @@ nvme0n1         238,5G
 
 ### Fase 1️ | Preparación de Infraestructura
 
+- Ver documentación: [Configuración de Red](./01-Network.md)
 **Objetivo**: Establecer base de red y seguridad
 
 - [x] Configurar red estática en D1 (192.168.1.11)
-- [x] Configurar red estática en D2 (192.168.1.12)
+- [x] Configurar red estática en D2 (192.168.1.21)
 - [x] Validar conectividad D1 ↔ D2 (ping, ssh)
 - [x] Actualizar SO en ambos nodos (`apt update && apt upgrade`)
 - [x] Sincronizar hora NTP en ambos nodos:
@@ -167,32 +168,26 @@ nvme0n1         238,5G
 - [x] Implementar fail2ban en ambos nodos
 - [x] Implementar VPN Wireguard para comunicación segura interna
 
-**Duración Estimada**: 2-3 horas
-
 ---
 
 ### Fase 2 | Infraestructura LXC y Containerización
 
+- Ver documentación: [Virtualizacion](./02-vm.md)
 **Objetivo**: Establecer contenedores base para Kubernetes
 
-- [ ] Instalar LXC/LXD en D1 y D2
+- [x] Instalar LXC/LXD en D1 y D2
   - `apt install lxd`
   - `lxd init` (configuración interactiva)
-- [ ] Crear bridge de red `lxdbr0` en ambos nodos
 - [ ] Crear contenedor `k8s-master` en D1
   - Imagen: Ubuntu 22.04 LTS
-  - IP estática: 192.168.1.12
+  - IP estática: 192.168.1.21
   - RAM: 3GB mínimo, 6GB ideal
 - [ ] Crear contenedor `k8s-worker` en D2
   - Imagen: Ubuntu 22.04 LTS
-  - IP estática: 192.168.1.13
+  - IP estática: 192.168.1.22
   - RAM: 2GB mínimo, 4GB ideal
 - [ ] Validar conectividad entre contenedores
 - [ ] Instalar dependencias base en ambos contenedores
-
-**Prerequisitos**: Fase 1 completada, RAM ampliada a 8GB
-
-**Duración Estimada**: 1-2 horas
 
 ---
 
@@ -215,7 +210,7 @@ Ejecutar en `k8s-master` y `k8s-worker`:
   - `systemctl status containerd`
   - `crictl pull alpine` (prueba)
 
-**Prerequisitos**: Fase 2 completada
+**Prerequisitos**: Fase 2 completada, RAM ampliada a 8GB
 
 **Duración Estimada**: 30 minutos
 
@@ -258,7 +253,7 @@ Ejecutar solo en `k8s-master`:
   ```bash
   kubeadm init \
     --pod-network-cidr=10.244.0.0/16 \
-    --apiserver-advertise-address=192.168.1.12
+    --apiserver-advertise-address=192.168.1.21
   ```
 - [ ] Copiar kubeconfig
   ```bash
@@ -313,7 +308,7 @@ Ejecutar solo en `k8s-worker`:
 
 - [ ] Ejecutar comando de unión (obtenido en Fase 5)
   ```bash
-  kubeadm join 192.168.1.12:6443 \
+  kubeadm join 192.168.1.21:6443 \
     --token <TOKEN> \
     --discovery-token-ca-cert-hash sha256:<HASH>
   ```
