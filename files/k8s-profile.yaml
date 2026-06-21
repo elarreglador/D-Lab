@@ -1,0 +1,14 @@
+name: k8s
+description: Perfil para contenedores Kubernetes con macvlan
+config: {}
+devices:
+  eth0:
+    name: eth0
+    network: macvlan0
+    type: nic
+  root:
+    path: /
+    pool: default
+    type: disk
+used_by: []
+project: default

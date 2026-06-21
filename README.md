@@ -176,18 +176,18 @@ nvme0n1         238,5G
 **Objetivo**: Establecer contenedores base para Kubernetes
 
 - [x] Instalar LXC/LXD en D1 y D2
-  - `apt install lxd`
+  - `snap install lxd`
   - `lxd init` (configuración interactiva)
-- [ ] Crear contenedor `k8s-master` en D1
+- [x] Crear contenedor `k8s-master-1` en D1
   - Imagen: Ubuntu 22.04 LTS
   - IP estática: 192.168.1.21
   - RAM: 3GB mínimo, 6GB ideal
-- [ ] Crear contenedor `k8s-worker` en D2
+- [x] Crear contenedor `k8s-worker-1` en D2
   - Imagen: Ubuntu 22.04 LTS
   - IP estática: 192.168.1.22
   - RAM: 2GB mínimo, 4GB ideal
-- [ ] Validar conectividad entre contenedores
-- [ ] Instalar dependencias base en ambos contenedores
+- [x] Validar conectividad entre contenedores
+- [x] Instalar dependencias base en ambos contenedores
 
 ---
 
