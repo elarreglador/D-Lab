@@ -9,8 +9,8 @@ Proyecto de virtualización y orquestación de contenedores usando LXC (Linux Co
 - [Arquitectura](#arquitectura)
 - [Hardware](#hardware)
 - [Tecnologías](#tecnologías)
-- [Documentación](#documentación)
-- [Plan de Implementación](#plan-de-implementación)
+- [Documentación Técnica](#documentación-técnica)
+- [Guía de Instalación](#guía-de-instalación)
 - [Estado del Proyecto](#estado-del-proyecto)
 
 ---
@@ -23,13 +23,16 @@ El cluster está diseñado con la siguiente estructura:
 Internet (Router) 
     ↓
 Switch Mercusys MS105G (10 Gbps)
-    ├── D1 (Control-Plane)
-    └── D2 (Worker)
+    ├── D1 (Control-Plane) - 192.168.1.11
+    │   └── k8s-master-1 (LXC) - 192.168.1.21
+    │
+    └── D2 (Worker) - 192.168.1.12
+        └── k8s-worker-1 (LXC) - 192.168.1.22
 ```
 
-**Topología de Red**: Ethernet dedicada, sin WiFi
-**Control-Plane**: D1 (192.168.1.11)
-**Worker**: D2 (192.168.1.X)
+**Topología de Red**: Ethernet dedicada, sin WiFi  
+**Control-Plane**: D1 con contenedor k8s-master-1  
+**Worker**: D2 con contenedor k8s-worker-1  
 
 ---
 
@@ -39,63 +42,46 @@ Switch Mercusys MS105G (10 Gbps)
 
 **Riello UPS RPR 650 230VAC** (aprox. 360 W)
 
-Sistema de alimentación ininterrumpida compacto para protección contra:
+Sistema de alimentación ininterrumpida para protección contra:
 - Cortes de energía
 - Sobretensiones
 - Fluctuaciones de voltaje
 
-Características:
-- 2 salidas tipo schuko
-- Nivel básico
-- Ideal para infraestructura pequeña
+Características: 2 salidas tipo schuko, nivel básico, ideal para infraestructura pequeña.
 
 ### Red (Switch)
 
 **Mercusys MS105G**
 
-Switch Gigabit de escritorio para redes domésticas o pequeñas oficinas.
-
-Especificaciones:
+Switch Gigabit de escritorio:
 - **Puertos**: 5 puertos RJ45 (10/100/1000 Mbps)
 - **Capacidad de Conmutación**: 10 Gbps (Backplane)
-- **Dimensiones**: 105 x 70 x 24.9 mm
-- **Características**: Auto-negociación
+- **Auto-negociación**: Sí
 
 ### Periféricos
 
 **Nooelec Ham It Up**
 
-Tratamiento previo de frecuencias para recepción SDR de bandas bajas.
-- Permite sintonizar frecuencias por debajo de 25MHz
-- Suma 125 MHz a la frecuencia para permitir recepcion en el SDR
-
-Dispositivo receptor de radio definido por software (SDR) basado en el chip RTL2832U.
-- Rango de frecuencia: Aproximadamente 25 MHz a 1700 MHz.
-- Conector de antena: Tipo SMA (estándar común).
-- Uso principal: Recepción de radiofrecuencias, escaneo de espectro y proyectos de radioafición.
+Dispositivo receptor de radio definido por software (SDR):
+- Tratamiento previo de frecuencias para recepción SDR de bandas bajas
+- Suma 125 MHz a la frecuencia para permitir recepción en el SDR
+- Rango: Aproximadamente 25 MHz a 1700 MHz
+- Conector: SMA
 
 ### Equipos Computacionales
 
 #### Dell OptiPlex 3050 Micro (x2)
 
-Especificaciones técnicas base (comando: `sudo lshw`):
-
 **Procesador (CPU)**
 - Modelo: Intel Core i3-7100T @ 3.40GHz
 - Núcleos: 2 / Hilos: 4
 - TDP: Bajo (T = Baja disipación térmica)
-- Rendimiento: Suficiente para K8S, ajustado para carga moderada
 
 **Memoria RAM**
 - Configuración Actual: 4 GB (INSUFICIENTE)
-- Recomendación: 8 GB mínimo, 16 GB ideal
+- Recomendación: 8 GB mínimo, 16 GB ideal para K8S
 - Tipo: Micron Technology 2400MHz
 - Swap: 4.0 GB
-
-```
-RAM:           3,2G Micron Technology 2400MHz
-Swap:          4,0G
-```
 
 **Almacenamiento**
 
@@ -118,7 +104,7 @@ nvme0n1         238,5G
 - Intel HD Graphics 630 (iGPU) - No requerida para K8S básico
 
 **Adaptador de Red**
-- RTL8111/8168/8211/8411 PCI Express Gigabit Ethernet (integrado en placa base)
+- RTL8111/8168/8211/8411 PCI Express Gigabit Ethernet
 
 ---
 
@@ -150,34 +136,58 @@ nvme0n1         238,5G
 
 ---
 
-## Plan de Implementación
+## Documentación Técnica
+
+| Documento | Descripción |
+|-----------|-------------|
+| [00-Requisitos.md](./00-Requisitos.md) | Requisitos de hardware, software y seguridad para el cluster K8S |
+| [01-Network.md](./01-Network.md) | Configuración de red estática, SSH, fail2ban y WireGuard VPN |
+| [02-vm.md](./02-vm.md) | Instalación y configuración de LXD, contenedores y conectividad |
+| [Hardware.md](./Hardware.md) | Especificaciones detalladas de equipos y periféricos |
+| [Incidente_ssh_socket.md](./Incidente_ssh_socket.md) | Análisis y resolución del conflicto entre ssh.socket y ssh.service |
+
+---
+
+## Guía de Instalación
 
 ### Fase 1️ | Preparación de Infraestructura
 
-- Ver documentación: [Configuración de Red](./01-Network.md)
 **Objetivo**: Establecer base de red y seguridad
 
 - [x] Configurar red estática en D1 (192.168.1.11)
-- [x] Configurar red estática en D2 (192.168.1.21)
+- [x] Configurar red estática en D2 (192.168.1.12)
 - [x] Validar conectividad D1 ↔ D2 (ping, ssh)
 - [x] Actualizar SO en ambos nodos (`apt update && apt upgrade`)
 - [x] Sincronizar hora NTP en ambos nodos:
-	sudo timedatectl set-ntp on
-	timedatectl status
-- [x] Cambiar puerto SSH (22 → custom)
+  ```bash
+  sudo timedatectl set-ntp on
+  timedatectl status
+  ```
+- [x] Cambiar puerto SSH (22 → 9622)
 - [x] Implementar fail2ban en ambos nodos
 - [x] Implementar VPN Wireguard para comunicación segura interna
+
+**Ver**: [01-Network.md](./01-Network.md)
 
 ---
 
 ### Fase 2 | Infraestructura LXC y Containerización
 
-- Ver documentación: [Virtualizacion](./02-vm.md)
 **Objetivo**: Establecer contenedores base para Kubernetes
 
 - [x] Instalar LXC/LXD en D1 y D2
-  - `snap install lxd`
-  - `lxd init` (configuración interactiva)
+  ```bash
+  sudo snap install lxd
+  ```
+- [x] Configurar LXD con storage pool ZFS
+  ```bash
+  lxd init
+  ```
+- [x] Crear red macvlan sobre enp2s0 en ambos nodos
+  ```bash
+  lxc network create macvlan0 --type=macvlan parent=enp2s0
+  ```
+- [x] Crear perfil k8s con macvlan en ambos nodos
 - [x] Crear contenedor `k8s-master-1` en D1
   - Imagen: Ubuntu 22.04 LTS
   - IP estática: 192.168.1.21
@@ -189,29 +199,40 @@ nvme0n1         238,5G
 - [x] Validar conectividad entre contenedores
 - [x] Instalar dependencias base en ambos contenedores
 
+**Ver**: [02-vm.md](./02-vm.md)
+
 ---
 
 ### Fase 3️ | Runtime de Contenedores
 
 **Objetivo**: Instalar y configurar containerd
 
-Ejecutar en `k8s-master` y `k8s-worker`:
+Ejecutar en `k8s-master-1` y `k8s-worker-1`:
 
 - [ ] Instalar dependencias
-  - `apt install curl wget gnupg2 apt-transport-https ca-certificates`
+  ```bash
+  apt install curl wget gnupg2 apt-transport-https ca-certificates
+  ```
 - [ ] Instalar containerd.io
-  - `apt install containerd.io`
+  ```bash
+  apt install containerd.io
+  ```
 - [ ] Generar configuración default
-  - `mkdir -p /etc/containerd`
-  - `containerd config default | tee /etc/containerd/config.toml`
+  ```bash
+  mkdir -p /etc/containerd
+  containerd config default | tee /etc/containerd/config.toml
+  ```
 - [ ] Reiniciar servicio
-  - `systemctl restart containerd`
+  ```bash
+  systemctl restart containerd
+  ```
 - [ ] Validar estado
-  - `systemctl status containerd`
-  - `crictl pull alpine` (prueba)
+  ```bash
+  systemctl status containerd
+  crictl pull alpine
+  ```
 
-**Prerequisitos**: Fase 2 completada, RAM ampliada a 8GB
-
+**Prerequisitos**: Fase 2 completada, RAM ampliada a 8GB  
 **Duración Estimada**: 30 minutos
 
 ---
@@ -220,7 +241,7 @@ Ejecutar en `k8s-master` y `k8s-worker`:
 
 **Objetivo**: Instalar componentes de K8S
 
-Ejecutar en `k8s-master` y `k8s-worker`:
+Ejecutar en `k8s-master-1` y `k8s-worker-1`:
 
 - [ ] Añadir repositorio de Kubernetes
   ```bash
@@ -228,17 +249,24 @@ Ejecutar en `k8s-master` y `k8s-worker`:
   apt-add-repository "deb http://apt.kubernetes.io/ kubernetes-xenial main"
   ```
 - [ ] Instalar componentes
-  - `apt install kubeadm kubelet kubectl`
+  ```bash
+  apt install kubeadm kubelet kubectl
+  ```
 - [ ] Prevenir actualizaciones automáticas
-  - `apt-mark hold kubeadm kubelet kubectl`
+  ```bash
+  apt-mark hold kubeadm kubelet kubectl
+  ```
 - [ ] Deshabilitar swap (permanentemente en `/etc/fstab`)
-  - `swapoff -a`
+  ```bash
+  swapoff -a
+  ```
 - [ ] Cargar módulos de kernel necesarios
-  - `modprobe br_netfilter`
-  - `sysctl -w net.ipv4.ip_forward=1`
+  ```bash
+  modprobe br_netfilter
+  sysctl -w net.ipv4.ip_forward=1
+  ```
 
-**Prerequisitos**: Fase 3 completada
-
+**Prerequisitos**: Fase 3 completada  
 **Duración Estimada**: 30 minutos
 
 ---
@@ -247,7 +275,7 @@ Ejecutar en `k8s-master` y `k8s-worker`:
 
 **Objetivo**: Inicializar cluster Kubernetes
 
-Ejecutar solo en `k8s-master`:
+Ejecutar solo en `k8s-master-1`:
 
 - [ ] Inicializar control-plane
   ```bash
@@ -262,13 +290,16 @@ Ejecutar solo en `k8s-master`:
   sudo chown $(id -u):$(id -g) $HOME/.kube/config
   ```
 - [ ] Guardar token de unión (para Fase 6)
-  - `kubeadm token create --print-join-command`
+  ```bash
+  kubeadm token create --print-join-command
+  ```
 - [ ] Validar acceso a cluster
-  - `kubectl cluster-info`
-  - `kubectl get nodes` (solo master visible)
+  ```bash
+  kubectl cluster-info
+  kubectl get nodes
+  ```
 
-**Prerequisitos**: Fase 4 completada
-
+**Prerequisitos**: Fase 4 completada  
 **Duración Estimada**: 15 minutos
 
 ---
@@ -277,25 +308,28 @@ Ejecutar solo en `k8s-master`:
 
 **Objetivo**: Configurar red entre pods
 
-Ejecutar solo en `k8s-master`:
+Ejecutar solo en `k8s-master-1`:
 
 - [ ] Instalar Flannel (opción simple)
   ```bash
   kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
   ```
 - [ ] Verificar pods de red
-  - `kubectl get pods -n kube-flannel`
+  ```bash
+  kubectl get pods -n kube-flannel
+  ```
 - [ ] Esperar a que todos estén en `Running`
 - [ ] Verificar que master esté `Ready`
-  - `kubectl get nodes` (debe mostrar `Ready`)
+  ```bash
+  kubectl get nodes
+  ```
 
 **Alternativa**: Calico para producción
   ```bash
   kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.24.1/manifests/tigera-operator.yaml
   ```
 
-**Prerequisitos**: Fase 5 completada
-
+**Prerequisitos**: Fase 5 completada  
 **Duración Estimada**: 5-10 minutos
 
 ---
@@ -304,7 +338,7 @@ Ejecutar solo en `k8s-master`:
 
 **Objetivo**: Incorporar segundo nodo al cluster
 
-Ejecutar solo en `k8s-worker`:
+Ejecutar solo en `k8s-worker-1`:
 
 - [ ] Ejecutar comando de unión (obtenido en Fase 5)
   ```bash
@@ -313,27 +347,33 @@ Ejecutar solo en `k8s-worker`:
     --discovery-token-ca-cert-hash sha256:<HASH>
   ```
 - [ ] Esperar sincronización (2-3 minutos)
-- [ ] Validar desde `k8s-master`
-  - `kubectl get nodes` (debe mostrar 2 nodos)
-  - `kubectl get pods -A` (verificar pods del sistema)
+- [ ] Validar desde `k8s-master-1`
+  ```bash
+  kubectl get nodes
+  kubectl get pods -A
+  ```
 
-**Prerequisitos**: Fase 6 completada
-
+**Prerequisitos**: Fase 6 completada  
 **Duración Estimada**: 5 minutos
 
 ---
 
-### Fase 8 ️| Almacenamiento Persistente
+### Fase 8️ | Almacenamiento Persistente
 
 **Objetivo**: Configurar volúmenes persistentes
 
 - [ ] Particionar disco mecánico en D1
-  - `lsblk` (identificar sda)
-  - `fdisk /dev/sda` (crear partición ext4)
-  - `mkfs.ext4 /dev/sda1`
-  - Montar en `/mnt/data-d1`
+  ```bash
+  lsblk
+  fdisk /dev/sda
+  mkfs.ext4 /dev/sda1
+  ```
+- [ ] Montar en `/mnt/data-d1`
 - [ ] Particionar disco mecánico en D2 (mismo procedimiento)
-  - Montar en `/mnt/data-d2`
+  ```bash
+  mkfs.ext4 /dev/sda1
+  ```
+- [ ] Montar en `/mnt/data-d2`
 - [ ] Instalar local-path-provisioner en cluster
   ```bash
   kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
@@ -341,8 +381,7 @@ Ejecutar solo en `k8s-worker`:
 - [ ] Crear StorageClass personalizado
 - [ ] Validar con PVC de prueba
 
-**Prerequisitos**: Fase 7 completada
-
+**Prerequisitos**: Fase 7 completada  
 **Duración Estimada**: 1-2 horas
 
 ---
@@ -357,21 +396,24 @@ Ejecutar solo en `k8s-worker`:
   kubectl expose deployment nginx --port=80 --type=LoadBalancer
   ```
 - [ ] Verificar distribución entre nodos
-  - `kubectl get pods -o wide`
+  ```bash
+  kubectl get pods -o wide
+  ```
 - [ ] Probar persistencia
   - Desplegar StatefulSet con PVC
   - Verificar que datos persisten tras reinicio
 - [ ] Validar logs y eventos
-  - `kubectl logs <pod>`
-  - `kubectl describe pod <pod>`
+  ```bash
+  kubectl logs <pod>
+  kubectl describe pod <pod>
+  ```
 
-**Prerequisitos**: Fase 8 completada
-
+**Prerequisitos**: Fase 8 completada  
 **Duración Estimada**: 30 minutos
 
 ---
 
-### Fase 10 | Seguridad Avanzada
+### Fase 10️ | Seguridad Avanzada
 
 **Objetivo**: Implementar RBAC y políticas de seguridad
 
@@ -386,13 +428,12 @@ Ejecutar solo en `k8s-worker`:
   ETCDCTL_API=3 etcdctl snapshot save backup.db
   ```
 
-**Prerequisitos**: Fase 9 completada
-
+**Prerequisitos**: Fase 9 completada  
 **Duración Estimada**: 2 horas
 
 ---
 
-### Fase 1️1️| Nginx Ingress Controller
+### Fase 11️ | Nginx Ingress Controller
 
 **Objetivo**: Configurar enrutamiento avanzado de tráfico
 
@@ -404,34 +445,27 @@ Ejecutar solo en `k8s-worker`:
 - [ ] Configurar certificados TLS (opcional: cert-manager)
 - [ ] Validar enrutamiento de múltiples servicios
 
-**Prerequisitos**: Fase 10 completada
-
+**Prerequisitos**: Fase 10 completada  
 **Duración Estimada**: 1-2 horas
 
 ---
 
-### Fase 1️2️ | Monitoreo y Observabilidad
+### Fase 12️ | Monitoreo y Observabilidad
 
 **Objetivo**: Implementar stack de monitoreo
 
 - [ ] Instalar Prometheus
-  - Crear namespace `monitoring`
-  - Desplegar Prometheus
-  - Configurar scrape targets
 - [ ] Instalar Grafana
-  - Conectar datasource Prometheus
-  - Importar dashboards predefinidos
 - [ ] Instalar AlertManager
 - [ ] Instalar node-exporter en nodos host
 - [ ] Crear alertas personalizadas
 
-**Prerequisitos**: Fase 11 completada
-
+**Prerequisitos**: Fase 11 completada  
 **Duración Estimada**: 3-4 horas
 
 ---
 
-### Fase 1️️3 | Resiliencia y Alta Disponibilidad
+### Fase 13️ | Resiliencia y Alta Disponibilidad
 
 **Objetivo**: Mejorar tolerancia a fallos
 
@@ -439,15 +473,66 @@ Ejecutar solo en `k8s-worker`:
 
 - [ ] Considerar agregar tercer nodo (D3) para HA
 - [ ] Replicar etcd (3 nodos mínimo)
-- [ ] Configurar Longhorn para almacenamiento distribuido (futuro)
+- [ ] Configurar Longhorn para almacenamiento distribuido
 - [ ] Implementar Pod Disruption Budgets
 - [ ] Crear estrategia de disaster recovery
 
-**Prerequisitos**: Fase 12 completada, hardware mejorado
-
-**Duración Estimada**: Variable (depende de decisiones arquitectónicas)
+**Prerequisitos**: Fase 12 completada, hardware mejorado  
+**Duración Estimada**: Variable
 
 ---
-# Contacto y Contribuciones
+
+## Estado del Proyecto
+
+### Completado ✅
+
+- [x] Fase 1: Preparación de Infraestructura
+  - Configuración de red estática (D1, D2)
+  - SSH seguro con puerto personalizado (9622)
+  - Fail2ban activado
+  - WireGuard VPN configurada
+  - Resolución del incidente ssh.socket/ssh.service
+
+- [x] Fase 2: Infraestructura LXC
+  - LXD instalado en D1 y D2
+  - Storage pool ZFS configurado
+  - Red macvlan0 creada
+  - Contenedores k8s-master-1 y k8s-worker-1 creados
+  - IPs estáticas asignadas (192.168.1.21, 192.168.1.22)
+  - Conectividad validada entre contenedores
+
+### En Progreso 🔄
+
+- [ ] Fase 3: Runtime de Contenedores (containerd)
+
+### Pendiente ⏳
+
+- [ ] Fases 4-13: Instalación de Kubernetes y componentes avanzados
+
+### Limitaciones Conocidas ⚠️
+
+- **RAM**: 4GB actual es insuficiente
+  - Mínimo recomendado: 8GB por nodo
+  - Ideal: 16GB por nodo
+  
+- **CPU**: 2 núcleos es mínimo absoluto
+  - Control-plane (D1): Requiere más CPU
+  - Worker (D2): Puede funcionar con limitaciones
+
+- **Almacenamiento**: Partición raíz 100GB podría ser limitante
+  - Disco mecánico 465GB ideal para PVC (Persistent Volume Claims)
+
+---
+
+## Recomendaciones Prioritarias
+
+1. **Ampliación de RAM a 8GB mínimo** - Crítico para Fase 3+
+2. **Continuar con Fase 3**: Runtime de Contenedores
+3. **Monitoreo activo** de rendimiento durante despliegue inicial
+4. **Backups regulares** de configuración y etcd
+
+---
+
+## Contacto y Contribuciones
 
 Este proyecto es parte del laboratorio de desarrollo (D-Lab) para investigación en infraestructura de contenedores y Kubernetes.
