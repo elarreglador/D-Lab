@@ -143,7 +143,7 @@ nvme0n1         238,5G
 | [00-Requisitos.md](./00-Requisitos.md) | Requisitos de hardware, software y seguridad para el cluster K8S |
 | [01-Network.md](./01-Network.md) | Configuración de red estática, SSH, fail2ban y WireGuard VPN |
 | [02-vm.md](./02-vm.md) | Instalación y configuración de LXD, contenedores y conectividad |
-| [Hardware.md](./Hardware.md) | Especificaciones detalladas de equipos y periféricos |
+| [Hardware.md](./Hardware.md) | Especificaciones técnicas verificadas del Dell OptiPlex 3050 Micro (CPU, GPU, RAM, almacenamiento, red) |
 | [Incidente_ssh_socket.md](./Incidente_ssh_socket.md) | Análisis y resolución del conflicto entre ssh.socket y ssh.service |
 
 ---
