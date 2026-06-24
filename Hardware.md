@@ -98,7 +98,7 @@
 ### Configuración del Sistema
 
 **Datos Reales del Sistema**:
-- **Memoria Total Instalada**: 3.2 GB
+- **Memoria Total Instalada**: 3.2 GB (1 módulo de 4 GB)
 - **Memoria en Uso**: 821 MB
 - **Memoria Libre**: 1.7 GB
 - **Memoria en Caché/Buffers**: 900 MB
@@ -106,17 +106,36 @@
 - **Swap Configurado**: 4.0 GB
 - **Swap en Uso**: 0 B
 
-**Especificaciones Técnicas**:
+**Módulo Instalado (DIMM1)**:
+- **Capacidad**: 4 GB
+- **Velocidad Verificada**: DDR4-2400 MT/s
+- **Tipo**: DDR4 SODIMM
+- **Form Factor**: SODIMM 260-pin
+- **Voltaje**: 1.2V
+- **Ancho de Datos**: 64 bits
+- **Estado**: Operativo
+
+**Especificaciones Técnicas de Ranuras**:
 - **Tipo**: DDR4 SODIMM (Small Outline DIMM)
-- **Ranuras Físicas**: 2 (según especificaciones OptiPlex 3050)
-- **Velocidad Nominal**: DDR4-2400 o DDR4-2133
+- **Ranuras Físicas**: 2 disponibles
+  - DIMM1: Ocupado (4 GB DDR4-2400)
+  - DIMM2: Vacío (disponible para ampliación)
+- **Velocidades Soportadas**: 
+  - DDR4-2400 (verificado como instalado)
+  - DDR4-2133 (6ª Generación)
 - **Voltaje Nominal**: 1.2V
 - **Arquitectura**: 64-bit
-- **Modo de Operación**: Dual Channel (si ambas ranuras pobladas)
+- **Modo de Operación**: Single Channel (actualmente), Dual Channel (con 2 módulos)
 
 **Capacidad Máxima Soportada**:
 - **Máximo Teórico**: 32 GB (2 × 16 GB DDR4 SODIMM)
-- **Configuración Actual**: 4 GB (1 módulo instalado)
+- **Configuración Actual**: 4 GB (1 módulo instalado en DIMM1)
+
+**Recomendación de Ampliación**:
+Para obtener máximo rendimiento con Dual Channel:
+- Instalar: 2 × 8 GB DDR4-2400 SODIMM
+- Resultado: 16 GB total en Dual Channel
+- Ancho de banda: 38.4 GB/s (vs. actual 19.2 GB/s en Single Channel)
 
 ---
 
