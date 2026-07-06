@@ -193,3 +193,56 @@ curl ifconfig.me
 sudo wg-quick down wg0
 sudo systemctl disable wg-quick@wg0
 ```
+
+# Router
+
+## Modelo
+
+**ZTE H3600P V9.0** (H3600P V9.0.0P5_DIGI)
+
+Router del proveedor de Internet. Hace las veces de gateway (192.168.1.1), servidor DHCP y punto de acceso WiFi.
+
+La interfaz de administración web está en `http://192.168.1.1/` (puertos 80 y 443).
+
+## Acceso Programático
+
+El router utiliza un mecanismo de login con SHA256. El flujo es:
+
+1. Obtener un token de sesión vía GET:
+   ```bash
+   curl -s "http://192.168.1.1/?_type=loginData&_tag=login_token"
+   ```
+   Devuelve un número (ej: `81594066`).
+
+2. Hacer login vía POST al mismo endpoint:
+   ```bash
+   curl -s "http://192.168.1.1/?_type=loginData&_tag=login_entry" \
+     -d "Username=<usuario>&Password=<sha256(password + token)>&_sessionTOKEN=<token>"
+   ```
+   La contraseña se envía como `SHA256(contraseña + token)` (en hexadecimal).
+
+3. La respuesta contiene un `sess_token` que debe enviarse en peticiones posteriores como `_sessionTOKEN`.
+
+### Ejemplo en Python
+
+```python
+import requests, hashlib
+
+base = "http://192.168.1.1"
+s = requests.Session()
+
+r = s.get(f"{base}/?_type=loginData&_tag=login_token")
+token = r.text.strip()
+
+sha = hashlib.sha256((password + token).encode()).hexdigest()
+r = s.post(f"{base}/?_type=loginData&_tag=login_entry",
+           data={"Username": user, "Password": sha, "_sessionTOKEN": token})
+
+sess_token = r.json()["sess_token"]
+# Usar sess_token en peticiones posteriores
+```
+
+## Lista de Dispositivos
+
+Una vez autenticado, la página principal (`/`) muestra una tabla con los dispositivos conectados (Nombre, MAC, IPv4, IPv6). Los dispositivos cableados (LAN) aparecen en la misma lista que los WiFi.
+

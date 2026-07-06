@@ -20,7 +20,7 @@ Proyecto de virtualización y orquestación de contenedores usando LXC (Linux Co
 El cluster está diseñado con la siguiente estructura:
 
 ```
-Internet (Router) 
+Internet (Router ZTE H3600P - 192.168.1.1)
     ↓
 Switch Mercusys MS105G (10 Gbps)
     ├── D1 (Control-Plane) - 192.168.1.11
@@ -57,6 +57,12 @@ Switch Gigabit de escritorio:
 - **Puertos**: 5 puertos RJ45 (10/100/1000 Mbps)
 - **Capacidad de Conmutación**: 10 Gbps (Backplane)
 - **Auto-negociación**: Sí
+
+### Router
+
+**ZTE H3600P V9.0**
+
+Router del proveedor (192.168.1.1, DHCP, WiFi). Más información en [01-Network.md](./01-Network.md#router).
 
 ### Periféricos
 
@@ -130,7 +136,7 @@ nvme0n1         238,5G
 
 **Topología de Red**
 - Conexión Ethernet dedicada (sin WiFi)
-- Router del ISP → Switch → Nodos
+- Router ZTE H3600P → Switch → Nodos
 - IPs estáticas configuradas con netplan
 - DNS: Google (8.8.8.8 / 8.8.4.4)
 
@@ -141,7 +147,7 @@ nvme0n1         238,5G
 | Documento | Descripción |
 |-----------|-------------|
 | [00-Requisitos.md](./00-Requisitos.md) | Requisitos de hardware, software y seguridad para el cluster K8S |
-| [01-Network.md](./01-Network.md) | Configuración de red estática, SSH, fail2ban y WireGuard VPN |
+| [01-Network.md](./01-Network.md) | Configuración de red estática, SSH, fail2ban, WireGuard VPN y router ZTE H3600P |
 | [02-vm.md](./02-vm.md) | Instalación y configuración de LXD, contenedores y conectividad |
 | [Hardware.md](./Hardware.md) | Especificaciones técnicas verificadas del Dell OptiPlex 3050 Micro (CPU, GPU, RAM, almacenamiento, red) |
 | [Incidente_ssh_socket.md](./Incidente_ssh_socket.md) | Análisis y resolución del conflicto entre ssh.socket y ssh.service |
