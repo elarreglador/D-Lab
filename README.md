@@ -84,9 +84,9 @@ Dispositivo receptor de radio definido por software (SDR):
 - TDP: Bajo (T = Baja disipación térmica)
 
 **Memoria RAM**
-- Configuración Actual: 4 GB (INSUFICIENTE)
-- Recomendación: 8 GB mínimo, 16 GB ideal para K8S
-- Tipo: Micron Technology 2400MHz
+- D1: 8 GB (2 × 4GB DDR4-2400 SODIMM) — Samsung M471A5143SB1-CRC + SK Hynix HMA851S6AFR6N-UH
+- D2: 8 GB (2 × 4GB DDR4-2400 SODIMM) — 2 × Micron 4ATF51264HZ-2G3B1
+- Configuración Original: 4 GB por nodo (1 módulo) — ampliado a 8 GB por nodo (Dual Channel)
 - Swap: 4.0 GB
 
 **Almacenamiento**
@@ -206,6 +206,42 @@ nvme0n1         238,5G
 - [x] Instalar dependencias base en ambos contenedores
 
 **Ver**: [02-vm.md](./02-vm.md)
+
+---
+
+### Fase 2.2 | Ampliación de Memoria RAM
+
+**Objetivo**: Alcanzar 8 GB por nodo (mínimo requerido para fases siguientes)
+
+**Situación Original**: Cada nodo contaba con 1 módulo de 4 GB DDR4-2400 SODIMM (total 4 GB por nodo, Single Channel), insuficiente para Kubernetes.
+
+**Procedimiento Realizado**:
+
+1. Extraer el módulo de 4 GB de D2 (SK Hynix HMA851S6AFR6N-UH, en DIMM1)
+2. Instalar ese módulo en D1, ranura DIMM2 (junto al Samsung M471A5143SB1-CRC existente en DIMM1)
+3. Instalar 2 módulos nuevos Micron 4ATF51264HZ-2G3B1 (4 GB c/u) en D2, ranuras DIMM1 y DIMM2
+
+**Configuración Final**:
+
+| Nodo | DIMM1 | DIMM2 | Total | Canal |
+|------|-------|-------|-------|-------|
+| D1 | Samsung 4GB DDR4-2400 | SK Hynix 4GB DDR4-2400 | **8 GB** | Dual Channel |
+| D2 | Micron 4GB DDR4-2400 | Micron 4GB DDR4-2400 | **8 GB** | Dual Channel |
+
+**Verificación**:
+```bash
+# Capacidad total visible
+free -h
+
+# Detalle de cada módulo
+sudo dmidecode -t memory | grep -E 'Size:|Locator:|Speed:|Manufacturer:|Part Number:'
+
+# Modo Dual Channel activo (2 dispositivos)
+sudo dmidecode -t memory | grep 'Number Of Devices'
+```
+
+**Requisito**: Hardware compatible (Dell OptiPlex 3050 Micro, 2 ranuras SODIMM DDR4, máximo 32 GB)  
+**Duración**: 15 minutos
 
 ---
 
@@ -507,6 +543,11 @@ Ejecutar solo en `k8s-worker-1`:
   - IPs estáticas asignadas (192.168.1.21, 192.168.1.22)
   - Conectividad validada entre contenedores
 
+- [x] Fase 2.2: Ampliación de Memoria RAM
+  - D1: Samsung 4GB (original) + SK Hynix 4GB (desde D2) = 8GB
+  - D2: 2 × Micron 4GB (nuevos) = 8GB
+  - Ambos en Dual Channel
+
 ### En Progreso 🔄
 
 - [ ] Fase 3: Runtime de Contenedores (containerd)
@@ -517,9 +558,9 @@ Ejecutar solo en `k8s-worker-1`:
 
 ### Limitaciones Conocidas ⚠️
 
-- **RAM**: 4GB actual es insuficiente
-  - Mínimo recomendado: 8GB por nodo
-  - Ideal: 16GB por nodo
+- **RAM**: 8GB por nodo (mínimo alcanzado, ideal 16GB)
+  - D1: 8GB (Samsung + SK Hynix, Dual Channel)
+  - D2: 8GB (2× Micron, Dual Channel)
   
 - **CPU**: 2 núcleos es mínimo absoluto
   - Control-plane (D1): Requiere más CPU
@@ -532,7 +573,7 @@ Ejecutar solo en `k8s-worker-1`:
 
 ## Recomendaciones Prioritarias
 
-1. **Ampliación de RAM a 8GB mínimo** - Crítico para Fase 3+
+1. ✅ **Ampliación de RAM completada** — 8 GB por nodo (Dual Channel)
 2. **Continuar con Fase 3**: Runtime de Contenedores
 3. **Monitoreo activo** de rendimiento durante despliegue inicial
 4. **Backups regulares** de configuración y etcd

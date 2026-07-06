@@ -95,47 +95,46 @@
 
 ## 3. MEMORIA (RAM)
 
-### Configuración del Sistema
+### Configuración del Sistema (Post-Ampliación, Julio 2026)
 
-**Datos Reales del Sistema**:
-- **Memoria Total Instalada**: 3.2 GB (1 módulo de 4 GB)
-- **Memoria en Uso**: 821 MB
-- **Memoria Libre**: 1.7 GB
-- **Memoria en Caché/Buffers**: 900 MB
-- **Memoria Disponible para Aplicaciones**: 2.4 GB
+**Datos Reales del Sistema - D1**:
+- **Memoria Total Instalada**: 7.1 GB disponibles (~8 GB físicos, 2 × 4 GB)
 - **Swap Configurado**: 4.0 GB
-- **Swap en Uso**: 0 B
 
-**Módulo Instalado (DIMM1)**:
-- **Capacidad**: 4 GB
-- **Velocidad Verificada**: DDR4-2400 MT/s
-- **Tipo**: DDR4 SODIMM
-- **Form Factor**: SODIMM 260-pin
-- **Voltaje**: 1.2V
-- **Ancho de Datos**: 64 bits
-- **Estado**: Operativo
+**Módulos en D1**:
+| Ranura | Capacidad | Marca | Part Number | Velocidad | Tipo |
+|--------|-----------|-------|-------------|-----------|------|
+| DIMM1 | 4 GB | Samsung (80CE) | M471A5143SB1-CRC | DDR4-2400 | SODIMM |
+| DIMM2 | 4 GB | SK Hynix (80AD) | HMA851S6AFR6N-UH | DDR4-2400 | SODIMM |
+
+**Datos Reales del Sistema - D2**:
+- **Memoria Total Instalada**: 7.1 GB disponibles (~8 GB físicos, 2 × 4 GB)
+- **Swap Configurado**: 4.0 GB
+
+**Módulos en D2**:
+| Ranura | Capacidad | Marca | Part Number | Velocidad | Tipo |
+|--------|-----------|-------|-------------|-----------|------|
+| DIMM1 | 4 GB | Micron (802C) | 4ATF51264HZ-2G3B1 | DDR4-2400 | SODIMM |
+| DIMM2 | 4 GB | Micron (802C) | 4ATF51264HZ-2G3B1 | DDR4-2400 | SODIMM |
 
 **Especificaciones Técnicas de Ranuras**:
 - **Tipo**: DDR4 SODIMM (Small Outline DIMM)
-- **Ranuras Físicas**: 2 disponibles
-  - DIMM1: Ocupado (4 GB DDR4-2400)
-  - DIMM2: Vacío (disponible para ampliación)
-- **Velocidades Soportadas**: 
-  - DDR4-2400 (verificado como instalado)
-  - DDR4-2133 (6ª Generación)
+- **Ranuras Físicas**: 2 disponibles por nodo
+- **Velocidades Soportadas**: DDR4-2400, DDR4-2133
 - **Voltaje Nominal**: 1.2V
 - **Arquitectura**: 64-bit
-- **Modo de Operación**: Single Channel (actualmente), Dual Channel (con 2 módulos)
+- **Modo de Operación**: Dual Channel (ambos nodos)
 
 **Capacidad Máxima Soportada**:
 - **Máximo Teórico**: 32 GB (2 × 16 GB DDR4 SODIMM)
-- **Configuración Actual**: 4 GB (1 módulo instalado en DIMM1)
+- **Configuración Actual**: 8 GB por nodo (2 módulos de 4 GB cada uno)
 
-**Recomendación de Ampliación**:
-Para obtener máximo rendimiento con Dual Channel:
-- Instalar: 2 × 8 GB DDR4-2400 SODIMM
-- Resultado: 16 GB total en Dual Channel
-- Ancho de banda: 38.4 GB/s (vs. actual 19.2 GB/s en Single Channel)
+**Historial de Ampliación**:
+1. **Estado Original** (Junio 2026): 1 módulo de 4 GB por nodo (Single Channel)
+2. **Ampliación** (Julio 2026):
+   - Módulo SK Hynix de D2 movido a D1 (DIMM2)
+   - 2 módulos Micron nuevos instalados en D2 (DIMM1 + DIMM2)
+   - Resultado: 8 GB por nodo en Dual Channel
 
 ---
 
@@ -279,8 +278,8 @@ Particiones:
 | Frecuencia Base | 3400 | MHz |
 | Frecuencia Mínima | 800 | MHz |
 | L3 Cache | 3 | MB |
-| Memoria Instalada | 3.2 | GB |
-| Memoria Disponible | 2.4 | GB |
+| Memoria Instalada | 8 (por nodo) | GB |
+| Memoria por Nodo | 2 × 4 GB DDR4-2400 SODIMM | - |
 | RAM Máxima Soportada | 32 | GB |
 | Almacenamiento NVMe | 256 | GB |
 | Almacenamiento SATA | 465.8 | GB |
@@ -314,6 +313,6 @@ Particiones:
 
 ---
 
-**Documento Generado**: Junio 2026  
-**Verificado en**: D-Lab D1 (Control-Plane Node)  
+**Documento Generado**: Junio 2026 (Actualizado Julio 2026 — Ampliación RAM)  
+**Verificado en**: D-Lab D1 (Control-Plane Node) y D2 (Worker Node)  
 **Método de Verificación**: Comandos del sistema (lscpu, lspci, lshw, dmidecode, /proc/cpuinfo, lsblk, ethtool)
