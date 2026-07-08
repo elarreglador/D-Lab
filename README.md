@@ -163,6 +163,8 @@ nvme0n1         238,5G
 
 **Objetivo**: Establecer base de red y seguridad
 
+Sin una red estática y segura, Kubernetes no puede garantizar comunicación fiable entre nodos. Esta fase configura IPs fijas, SSH seguro, fail2ban y WireGuard para proteger el laboratorio antes de desplegar cualquier servicio.
+
 - [x] Configurar red estática en D1 (192.168.1.11)
 - [x] Configurar red estática en D2 (192.168.1.12)
 - [x] Validar conectividad D1 ↔ D2 (ping, ssh)
@@ -183,6 +185,8 @@ nvme0n1         238,5G
 ### Fase 2 | Infraestructura LXC y Containerización
 
 **Objetivo**: Establecer contenedores base para Kubernetes
+
+Kubernetes necesita nodos donde ejecutarse. En lugar de instalar Kubernetes directamente sobre el SO del host, usamos LXC para aislar el cluster en contenedores ligeros, facilitando la gestión y el mantenimiento del laboratorio.
 
 - [x] Instalar LXC/LXD en D1 y D2
   ```bash
@@ -215,6 +219,8 @@ nvme0n1         238,5G
 ### Fase 2.2 | Ampliación de Memoria RAM
 
 **Objetivo**: Alcanzar 8 GB por nodo (mínimo requerido para fases siguientes)
+
+Los Dell OptiPlex 3050 Micro venían de serie con 4 GB — justos para el SO pero insuficientes para Kubernetes, que necesita al menos 2 GB solo para el control-plane. Esta fase reasigna y amplía los módulos para alcanzar 8 GB en Dual Channel.
 
 **Situación Original**: Cada nodo contaba con 1 módulo de 4 GB DDR4-2400 SODIMM (total 4 GB por nodo, Single Channel), insuficiente para Kubernetes.
 
@@ -251,6 +257,8 @@ sudo dmidecode -t memory | grep 'Number Of Devices'
 ### Fase 2.3 | Cluster LXD
 
 **Objetivo**: Unificar D1 y D2 en un mismo cluster LXD para gestionar contenedores de ambos nodos desde cualquier miembro.
+
+Tener dos nodos LXD independientes obliga a gestionar contenedores por separado. Un cluster LXD unificado permite controlar ambos desde un solo punto, simplificando la administración del laboratorio.
 
 **Problema Inicial**: Tras `lxd init`, cada nodo creó su propio cluster independiente (single-node). `lxc cluster list` solo mostraba el nodo local.
 
@@ -328,6 +336,8 @@ k8s-worker-1  RUNNING  192.168.1.22  D2
 
 **Objetivo**: Instalar y configurar containerd
 
+Kubernetes no gestiona contenedores directamente: necesita un runtime que los cree y administre. containerd es el runtime estándar, encargado de descargar imágenes, arrancar pods y gestionar su ciclo de vida.
+
 Ejecutar en `k8s-master-1` y `k8s-worker-1`:
 
 - [x] Instalar dependencias
@@ -361,6 +371,8 @@ Ejecutar en `k8s-master-1` y `k8s-worker-1`:
 ### Fase 4️ | Instalación de Kubernetes
 
 **Objetivo**: Instalar componentes de K8S (kubeadm, kubelet, kubectl) y configurar el nodo.
+
+kubeadm, kubelet y kubectl son el trío base de Kubernetes: kubeadm inicializa el cluster, kubelet orquesta los pods en cada nodo y kubectl permite interactuar con el API Server. Esta fase los instala desde el repositorio oficial.
 
 Ejecutar todos los pasos en `k8s-master-1` y `k8s-worker-1`.
 
@@ -428,6 +440,8 @@ Ejecutar todos los pasos en `k8s-master-1` y `k8s-worker-1`.
 ### Fase 5️ | Control-Plane
 
 **Objetivo**: Inicializar cluster Kubernetes
+
+El control-plane es el cerebro del cluster: aloja etcd (base de datos), el API Server (puerta de entrada), el scheduler (asignación de pods) y el controller-manager (gestión de estado). Con `kubeadm init` generamos todos estos componentes y los certificados necesarios.
 
 Ejecutar solo en `k8s-master-1`:
 
@@ -500,6 +514,8 @@ Ejecutar solo en `k8s-master-1`:
 
 **Objetivo**: Poder ejecutar `kubectl` desde el host sin entrar al contenedor.
 
+La red macvlan aísla los contenedores LXC en su propia subred, impidiendo que el host acceda directamente al API Server de Kubernetes. Este wrapper ejecuta kubectl dentro del contenedor automáticamente, dando una experiencia transparente desde D1.
+
 Ejecutar en **D1** (no dentro del contenedor):
 
 - [x] Instalar kubectl en D1
@@ -548,6 +564,8 @@ Ejecutar en **D1** (no dentro del contenedor):
 
 **Objetivo**: Configurar red entre pods
 
+Los pods necesitan una red plana donde cada uno tenga una IP única y pueda comunicarse con cualquier otro sin NAT. Flannel implementa esta red overlay usando VXLAN o host-gw, asignando subredes /24 a cada nodo.
+
 Ejecutar solo en `k8s-master-1`:
 
 - [x] Instalar Flannel (CNI por defecto)
@@ -580,6 +598,8 @@ Ejecutar solo en `k8s-master-1`:
 ### Fase 7️ | Unir Worker
 
 **Objetivo**: Incorporar segundo nodo al cluster
+
+Un cluster de un solo nodo no demuestra orquestación real. Al unir k8s-worker-1 desde D2, Kubernetes puede distribuir pods entre dos máquinas físicas, sentando las bases para alta disponibilidad y balanceo de carga.
 
 Ejecutar en `k8s-worker-1`:
 
@@ -627,6 +647,8 @@ Ejecutar en `k8s-worker-1`:
 ### Fase 8️ | Almacenamiento Persistente (Longhorn)
 
 **Objetivo**: Configurar volúmenes persistentes distribuidos con Longhorn
+
+Los pods son efímeros por diseño: al reiniciarse pierden todo su almacenamiento local. Longhorn provee volúmenes persistentes distribuidos que replican los datos entre nodos, permitiendo que los pods mantengan su estado incluso si migran de nodo o se recuperan tras un fallo.
 
 #### 8.1 Particionar y montar discos mecánicos
 
@@ -752,6 +774,8 @@ kubectl delete pvc test-longhorn-pvc
 
 **Objetivo**: Validar funcionamiento básico del cluster
 
+Antes de añadir capas de seguridad o monitoreo, conviene verificar que el cluster orquesta correctamente: despliegues, servicios, persistencia y distribución entre nodos. Un Nginx de prueba basta para validar el core.
+
 - [ ] Desplegar Nginx de prueba
   ```bash
   kubectl create deployment nginx --image=nginx
@@ -779,6 +803,8 @@ kubectl delete pvc test-longhorn-pvc
 
 **Objetivo**: Implementar RBAC y políticas de seguridad
 
+Un cluster expuesto sin controles de acceso es vulnerable. RBAC restringe qué puede hacer cada usuario o servicio, NetworkPolicies aíslan tráfico entre pods y la auditoría registra toda actividad en el API Server para forense.
+
 - [ ] Configurar RBAC
   - Crear roles personalizados
   - Crear RoleBindings
@@ -799,6 +825,8 @@ kubectl delete pvc test-longhorn-pvc
 
 **Objetivo**: Configurar enrutamiento avanzado de tráfico
 
+Los Services tipo ClusterIP o NodePort tienen limitaciones para enrutar tráfico HTTP/HTTPS. Un Ingress Controller actúa como proxy inverso dentro del cluster, permitiendo enrutar por dominio, TLS y balanceo de carga a múltiples servicios.
+
 - [ ] Instalar Nginx Ingress Controller
   ```bash
   kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
@@ -816,6 +844,8 @@ kubectl delete pvc test-longhorn-pvc
 
 **Objetivo**: Implementar stack de monitoreo
 
+Sin métricas ni logs, operar un cluster es como volar a ciegas. Prometheus recolecta métricas de todos los nodos y servicios, Grafana las visualiza en paneles y AlertManager notifica cuando algo va mal.
+
 - [ ] Instalar Prometheus
 - [ ] Instalar Grafana
 - [ ] Instalar AlertManager
@@ -830,6 +860,8 @@ kubectl delete pvc test-longhorn-pvc
 ### Fase 13️ | Resiliencia y Alta Disponibilidad
 
 **Objetivo**: Mejorar tolerancia a fallos
+
+Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker pero no la del maestro. Esta fase prepara el camino hacia un cluster de producción: etcd replicado, Pod Disruption Budgets y un plan de disaster recovery para cuando llegue D3.
 
 **Nota**: Requiere ampliación RAM a 16GB y/o adición de D3
 
