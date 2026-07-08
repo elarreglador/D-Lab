@@ -153,6 +153,7 @@ nvme0n1         238,5G
 | [README.md](./README.md#fase-23--cluster-lxd) | Fase 2.3: Unificación de D1 y D2 en un mismo cluster LXD (sección en este documento) |
 | [incidentes/ssh_socket.md](./incidentes/ssh_socket.md) | Análisis y resolución del conflicto entre ssh.socket y ssh.service |
 | [incidentes/network-pcie-aspm.md](./incidentes/network-pcie-aspm.md) | NIC no responde ARP por ASPM + driver r8169 — solución con pcie_aspm=off |
+| [incidentes/ip-dinamica-netplan.md](./incidentes/ip-dinamica-netplan.md) | IPs DHCP secundarias por conflicto netplan — solución: eliminar 50-cloud-init.yaml |
 
 ---
 
