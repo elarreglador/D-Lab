@@ -150,6 +150,7 @@ nvme0n1         238,5G
 | [01-Network.md](./01-Network.md) | Configuración de red estática, SSH, fail2ban, WireGuard VPN y router ZTE H3600P |
 | [02-vm.md](./02-vm.md) | Instalación y configuración de LXD, contenedores y conectividad |
 | [Hardware.md](./Hardware.md) | Especificaciones técnicas verificadas del Dell OptiPlex 3050 Micro (CPU, GPU, RAM, almacenamiento, red) |
+| [README.md](./README.md#fase-23--cluster-lxd) | Fase 2.3: Unificación de D1 y D2 en un mismo cluster LXD (sección en este documento) |
 | [incidentes/ssh_socket.md](./incidentes/ssh_socket.md) | Análisis y resolución del conflicto entre ssh.socket y ssh.service |
 | [incidentes/network-pcie-aspm.md](./incidentes/network-pcie-aspm.md) | NIC no responde ARP por ASPM + driver r8169 — solución con pcie_aspm=off |
 
@@ -246,33 +247,109 @@ sudo dmidecode -t memory | grep 'Number Of Devices'
 
 ---
 
+### Fase 2.3 | Cluster LXD
+
+**Objetivo**: Unificar D1 y D2 en un mismo cluster LXD para gestionar contenedores de ambos nodos desde cualquier miembro.
+
+**Problema Inicial**: Tras `lxd init`, cada nodo creó su propio cluster independiente (single-node). `lxc cluster list` solo mostraba el nodo local.
+
+**Procedimiento**:
+
+1. **Verificar estado inicial** en ambos nodos:
+   ```bash
+   lxc cluster list
+   ```
+
+2. **En D2**: Salir de su cluster individual modificando la base de datos local:
+   ```bash
+   lxd sql local "DELETE FROM raft_nodes"
+   lxd sql local "DELETE FROM config WHERE key='cluster.https_address'"
+   lxd shutdown --force
+   ```
+
+3. **En D2**: Eliminar la base de datos y reiniciar el servicio:
+   ```bash
+   sudo systemctl stop snap.lxd.daemon.unix.socket snap.lxd.daemon.service
+   sudo rm -rf /var/snap/lxd/common/lxd/database/
+   sudo systemctl start snap.lxd.daemon.unix.socket
+   ```
+
+4. **En D2**: Recuperar el pool de almacenamiento ZFS y contenedores existentes:
+   ```bash
+   lxd recover
+   ```
+
+5. **En D1**: Generar token de unión para D2:
+   ```bash
+   lxc cluster add D2
+   ```
+
+6. **En D2**: Unirse al cluster de D1 mediante preseed:
+   ```bash
+   cat > join.yaml << EOF
+   cluster:
+     server_name: D2
+     enabled: true
+     cluster_address: 192.168.1.11:8443
+     cluster_token: "<TOKEN>"
+     server_address: 192.168.1.12:8443
+   EOF
+   lxd init --preseed < join.yaml
+   ```
+
+7. **Verificar** desde cualquier nodo:
+   ```bash
+   lxc cluster list
+   lxc list --all-projects
+   ```
+
+**Resultado**:
+```
+lxc cluster list:
+D1 (database-leader)  ONLINE  https://192.168.1.11:8443
+D2 (database-standby) ONLINE  https://192.168.1.12:8443
+
+lxc list --all-projects:
+k8s-master-1  RUNNING  192.168.1.21  D1
+k8s-worker-1  RUNNING  192.168.1.22  D2
+```
+
+**Notas**:
+- `k8s-worker-1` puede perderse del registro al unir D2 al cluster. Recuperarlo con `lxd recover` post-unión.
+- El perfil `k8s` y la red `macvlan0` deben crearse de nuevo en D2 tras la limpieza de base de datos.
+- La contraseña sudo de D2 es necesaria para los pasos 3 y 4.
+
+**Duración Estimada**: 30-45 minutos
+
+---
+
 ### Fase 3️ | Runtime de Contenedores
 
 **Objetivo**: Instalar y configurar containerd
 
 Ejecutar en `k8s-master-1` y `k8s-worker-1`:
 
-- [ ] Instalar dependencias
+- [x] Instalar dependencias
   ```bash
   apt install curl wget gnupg2 apt-transport-https ca-certificates
   ```
-- [ ] Instalar containerd.io
+- [x] Instalar containerd.io
   ```bash
   apt install containerd.io
   ```
-- [ ] Generar configuración default
+- [x] Generar configuración default
   ```bash
   mkdir -p /etc/containerd
   containerd config default | tee /etc/containerd/config.toml
   ```
-- [ ] Reiniciar servicio
+- [x] Reiniciar servicio
   ```bash
   systemctl restart containerd
   ```
-- [ ] Validar estado
+- [x] Validar estado
   ```bash
   systemctl status containerd
-  crictl pull alpine
+  ctr image pull docker.io/library/alpine:latest
   ```
 
 **Prerequisitos**: Fase 2 completada, RAM ampliada a 8GB  
@@ -549,9 +626,21 @@ Ejecutar solo en `k8s-worker-1`:
   - D2: 2 × Micron 4GB (nuevos) = 8GB
   - Ambos en Dual Channel
 
+- [x] Fase 2.3: Cluster LXD
+  - D1 y D2 unificados en un mismo cluster LXD
+  - `lxc cluster list` muestra ambos nodos (D1 leader, D2 standby)
+  - Contenedores visibles desde cualquier miembro del cluster
+  - Recuperación de contenedor k8s-worker-1 tras unión al cluster
+
+- [x] Fase 3: Runtime de Contenedores (containerd)
+  - Repositorio Docker añadido en ambos contenedores
+  - containerd.io instalado (v2.2.5)
+  - Configuración default generada
+  - Servicio activo y validado (pull de alpine exitoso)
+
 ### En Progreso 🔄
 
-- [ ] Fase 3: Runtime de Contenedores (containerd)
+- [ ] Fase 4: Instalación de Kubernetes
 
 ### Pendiente ⏳
 
@@ -575,9 +664,10 @@ Ejecutar solo en `k8s-worker-1`:
 ## Recomendaciones Prioritarias
 
 1. ✅ **Ampliación de RAM completada** — 8 GB por nodo (Dual Channel)
-2. **Continuar con Fase 3**: Runtime de Contenedores
-3. **Monitoreo activo** de rendimiento durante despliegue inicial
-4. **Backups regulares** de configuración y etcd
+2. ✅ **Fase 3 completada** — containerd instalado y validado en ambos contenedores
+3. **Continuar con Fase 4**: Instalación de Kubernetes
+4. **Monitoreo activo** de rendimiento durante despliegue inicial
+5. **Backups regulares** de configuración y etcd
 
 ---
 

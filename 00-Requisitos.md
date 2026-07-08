@@ -18,10 +18,10 @@ Para el checklist de implementación, consultar [README.md](./README.md#guía-de
 - **Consideración**: Suficiente como mínimo, pero ajustado para cargas de trabajo moderadas
 
 #### Memoria RAM
-- **Configuración Actual**: 4 GB (INSUFICIENTE)
-- **Mínimo Recomendado**: 8 GB por nodo
+- **Configuración Actual**: 8 GB por nodo (2 × 4 GB DDR4-2400 SODIMM, Dual Channel)
+- **Mínimo Recomendado**: 8 GB por nodo ✅
 - **Ideal para K8S**: 16 GB por nodo
-- **Urgencia**: Ampliación prioritaria antes de desplegar en producción
+- **Urgencia**: Mínimo alcanzado — ampliación a 16 GB futura para entornos con carga media/alta
 
 #### Almacenamiento
 - **NVMe M.2 Sandisk SN520**: 238.5 GB (para SO, kubelet, contenedores)
@@ -137,7 +137,7 @@ Para el checklist de implementación, consultar [README.md](./README.md#guía-de
 - Agregar equipos a VPN wireguard
 
 ### Hardware
-- Ampliación de RAM a mínimo 8GB, idealmente 16GB por nodo
+- [x] Ampliación de RAM a 8GB por nodo (Dual Channel) — completada
 - Considerar agregar un tercer equipo físico para mayor resiliencia
 
 ---
@@ -145,12 +145,13 @@ Para el checklist de implementación, consultar [README.md](./README.md#guía-de
 ## Limitaciones Actuales
 
 ### RAM
-- **4 GB actual**: Insuficiente para ejecutar:
+- **8 GB actual**: Mínimo alcanzado, pero puede quedarse justo con:
   - Sistema operativo Ubuntu
   - Servicio LXC
   - Contenedor con K8S
   - Aplicaciones de usuario
   - etcd y API server (en D1)
+- **Ideal**: 16 GB por nodo para cargas de trabajo moderadas/altas
 
 ### CPU
 - **2 núcleos**: Mínimo absoluto
@@ -167,9 +168,9 @@ Para el checklist de implementación, consultar [README.md](./README.md#guía-de
 
 ### Prioritarias (antes de desplegar K8S)
 
-1. **Ampliación de RAM a 8GB mínimo** - Crítico
-2. **Asignar IP estática a D2** - Requerido
-3. **Instalar y configurar LXC** en ambos nodos
+1. ✅ **Ampliación de RAM a 8GB mínimo** — Completada
+2. ✅ **Asignar IP estática a D2** — Completada
+3. ✅ **Instalar y configurar LXC** en ambos nodos — Completado
 4. **Instalar runtime de contenedores** (containerd recomendado)
 
 ### Secundarias (para optimizar)
