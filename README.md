@@ -370,19 +370,16 @@ Ejecutar todos los pasos en `k8s-master-1` y `k8s-worker-1`.
   sudo systemctl restart containerd
   ```
 
-- [ ] Deshabilitar swap (permanentemente en `/etc/fstab`)
+- [x] Deshabilitar swap — **no aplica en LXC** (swap virtual gestionado por el host). Se usa `failSwapOn: false` en Fase 5.
+
+- [x] Cargar módulos de kernel necesarios (ejecutar en los **hosts** D1 y D2, no dentro del contenedor)
   ```bash
-  sudo swapoff -a
-  sudo sed -i '/ swap / s/^/#/' /etc/fstab
+  ssh D1 "echo <CLAVE_SUDO> | sudo -S modprobe overlay && sudo modprobe br_netfilter"
+  ssh -p 9622 elarreglador@192.168.1.12 \
+    "echo <CLAVE_SUDO> | sudo -S modprobe overlay && sudo modprobe br_netfilter"
   ```
 
-- [ ] Cargar módulos de kernel necesarios
-  ```bash
-  sudo modprobe overlay
-  sudo modprobe br_netfilter
-  ```
-
-- [ ] Configurar sysctl para red de Kubernetes
+- [x] Configurar sysctl para red de Kubernetes
   ```bash
   cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
   net.bridge.bridge-nf-call-iptables = 1
@@ -392,35 +389,33 @@ Ejecutar todos los pasos en `k8s-master-1` y `k8s-worker-1`.
   sudo sysctl --system
   ```
 
-- [ ] Instalar dependencias para el repositorio
+- [x] Instalar dependencias para el repositorio
   ```bash
   sudo apt-get update
   sudo apt-get install -y apt-transport-https ca-certificates curl gpg
   ```
 
-- [ ] Añadir repositorio oficial de Kubernetes (v1.36)
+- [x] Añadir repositorio oficial de Kubernetes (v1.36)
   ```bash
-  # Descargar clave GPG
   curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key |
     sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-  # Añadir repositorio (firmado con signed-by)
   echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /' |
     sudo tee /etc/apt/sources.list.d/kubernetes.list
   ```
 
-- [ ] Instalar kubeadm, kubelet y kubectl
+- [x] Instalar kubeadm, kubelet y kubectl
   ```bash
   sudo apt-get update
   sudo apt-get install -y kubelet kubeadm kubectl
   ```
 
-- [ ] Prevenir actualizaciones automáticas
+- [x] Prevenir actualizaciones automáticas
   ```bash
   sudo apt-mark hold kubelet kubeadm kubectl
   ```
 
-- [ ] Habilitar kubelet
+- [x] Habilitar kubelet
   ```bash
   sudo systemctl enable --now kubelet
   ```
