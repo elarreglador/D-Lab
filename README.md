@@ -363,7 +363,7 @@ Ejecutar en `k8s-master-1` y `k8s-worker-1`:
 
 Ejecutar todos los pasos en `k8s-master-1` y `k8s-worker-1`.
 
-- [ ] Configurar containerd para systemd cgroup driver
+- [x] Configurar containerd para systemd cgroup driver
   ```bash
   sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
   sudo systemctl restart containerd
@@ -435,30 +435,68 @@ Ejecutar todos los pasos en `k8s-master-1` y `k8s-worker-1`.
 
 Ejecutar solo en `k8s-master-1`:
 
-- [ ] Inicializar control-plane
+- [x] Configurar LXC para Kubernetes (ejecutar UNA VEZ por contenedor)
   ```bash
-  kubeadm init \
-    --pod-network-cidr=10.244.0.0/16 \
-    --apiserver-advertise-address=192.168.1.21
+  lxc config set k8s-master-1 security.nesting=true security.privileged=true
+  lxc restart k8s-master-1
+  # Dentro del contenedor tras reinicio:
+  echo "L! /dev/kmsg - - - - /dev/console" | sudo tee /usr/lib/tmpfiles.d/kmsg.conf
+  sudo ln -sf /dev/console /dev/kmsg
+  sudo mount -o remount,rw /proc/sys
   ```
-- [ ] Copiar kubeconfig
+
+- [x] Inicializar control-plane (con config para LXC)
+  ```bash
+  cat <<EOF > /tmp/kubeadm-config.yaml
+  kind: InitConfiguration
+  apiVersion: kubeadm.k8s.io/v1beta4
+  ---
+  kind: ClusterConfiguration
+  apiVersion: kubeadm.k8s.io/v1beta4
+  kubernetesVersion: v1.36.2
+  networking:
+    podSubnet: "10.244.0.0/16"
+  apiServer:
+    certSANs:
+    - "192.168.1.21"
+  controlPlaneEndpoint: "192.168.1.21:6443"
+  ---
+  kind: KubeletConfiguration
+  apiVersion: kubelet.config.k8s.io/v1beta1
+  failSwapOn: false
+  cgroupDriver: systemd
+  localStorageCapacityIsolation: false
+  EOF
+  kubeadm init --config=/tmp/kubeadm-config.yaml --ignore-preflight-errors=SystemVerification
+  ```
+
+- [x] Subir configuraciones faltantes
+  ```bash
+  kubeadm init phase upload-config kubeadm --config=/tmp/kubeadm-config.yaml
+  kubeadm init phase upload-config kubelet --config=/tmp/kubeadm-config.yaml
+  kubeadm init phase bootstrap-token
+  kubectl create clusterrolebinding kubeadm-config-reader --clusterrole=cluster-admin --group=system:bootstrappers
+  ```
+
+- [x] Copiar kubeconfig
   ```bash
   mkdir -p $HOME/.kube
-  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo cp -i /etc/kubernetes/super-admin.conf $HOME/.kube/config
   sudo chown $(id -u):$(id -g) $HOME/.kube/config
   ```
-- [ ] Guardar token de unión (para Fase 6)
+
+- [x] Guardar token de unión (para Fase 7)
   ```bash
   kubeadm token create --print-join-command
   ```
-- [ ] Validar acceso a cluster
+
+- [x] Validar acceso a cluster
   ```bash
-  kubectl cluster-info
   kubectl get nodes
   ```
 
 **Prerequisitos**: Fase 4 completada  
-**Duración Estimada**: 15 minutos
+**Duración Estimada**: 20 minutos
 
 ---
 
@@ -468,23 +506,26 @@ Ejecutar solo en `k8s-master-1`:
 
 Ejecutar solo en `k8s-master-1`:
 
-- [ ] Instalar Flannel (opción simple)
+- [x] Instalar Flannel (CNI por defecto)
   ```bash
-  kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+  kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
   ```
-- [ ] Verificar pods de red
+- [x] Subir configuración de kube-proxy (si no se genera automáticamente)
   ```bash
-  kubectl get pods -n kube-flannel
+  kubeadm init phase addon kube-proxy --config=/tmp/kubeadm-config.yaml
+  # Si kube-proxy falla por conntrack (LXC), editar ConfigMap:
+  kubectl edit configmap -n kube-system kube-proxy
+  # Cambiar conntrack.maxPerCore: 0 y conntrack.min: 0
+  kubectl rollout restart daemonset -n kube-system kube-proxy
   ```
-- [ ] Esperar a que todos estén en `Running`
-- [ ] Verificar que master esté `Ready`
+- [x] Verificar pods de red
+  ```bash
+  kubectl get pods -A
+  ```
+- [x] Esperar a que todos estén en `Running`
+- [x] Verificar que nodos estén `Ready`
   ```bash
   kubectl get nodes
-  ```
-
-**Alternativa**: Calico para producción
-  ```bash
-  kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.24.1/manifests/tigera-operator.yaml
   ```
 
 **Prerequisitos**: Fase 5 completada  
@@ -496,16 +537,39 @@ Ejecutar solo en `k8s-master-1`:
 
 **Objetivo**: Incorporar segundo nodo al cluster
 
-Ejecutar solo en `k8s-worker-1`:
+Ejecutar en `k8s-worker-1`:
 
-- [ ] Ejecutar comando de unión (obtenido en Fase 5)
+- [x] Aplicar configuración LXC para Kubernetes
   ```bash
-  kubeadm join 192.168.1.21:6443 \
-    --token <TOKEN> \
-    --discovery-token-ca-cert-hash sha256:<HASH>
+  lxc config set k8s-worker-1 security.nesting=true security.privileged=true
+  lxc restart k8s-worker-1
+  # Dentro del contenedor tras reinicio:
+  echo "L! /dev/kmsg - - - - /dev/console" | sudo tee /usr/lib/tmpfiles.d/kmsg.conf
+  sudo ln -sf /dev/console /dev/kmsg
+  sudo mount -o remount,rw /proc/sys
   ```
-- [ ] Esperar sincronización (2-3 minutos)
-- [ ] Validar desde `k8s-master-1`
+
+- [x] Ejecutar comando de unión (obtenido en Fase 5) con configuración para LXC
+  ```bash
+  cat <<EOF > /tmp/kubeadm-join.yaml
+  apiVersion: kubeadm.k8s.io/v1beta4
+  kind: JoinConfiguration
+  discovery:
+    bootstrapToken:
+      token: "<TOKEN>"
+      apiServerEndpoint: "192.168.1.21:6443"
+      caCertHashes:
+      - "sha256:<HASH>"
+  nodeRegistration:
+    kubeletExtraArgs:
+      - name: "fail-swap-on"
+        value: "false"
+  EOF
+  kubeadm join --config=/tmp/kubeadm-join.yaml --ignore-preflight-errors=SystemVerification
+  ```
+
+- [x] Esperar sincronización (2-3 minutos)
+- [x] Validar desde `k8s-master-1`
   ```bash
   kubectl get nodes
   kubectl get pods -A
@@ -676,13 +740,48 @@ Ejecutar solo en `k8s-worker-1`:
   - Configuración default generada
   - Servicio activo y validado (pull de alpine exitoso)
 
+- [x] Fase 4: Instalación de Kubernetes
+  - Repositorio oficial pkgs.k8s.io con signed-by
+  - kubeadm/kubelet/kubectl v1.36.2 instalados
+  - containerd configurado con SystemdCgroup
+  - kubelet habilitado
+
+- [x] Fase 5: Control-Plane
+  - kubeadm init con kubeadm-config.yaml (failSwapOn, localStorageCapacityIsolation)
+  - ConfigMaps subidos (kubeadm-config, kubelet-config, bootstrap-token)
+  - RBAC para system:bootstrappers configurado
+  - kubeconfig operativo (super-admin.conf)
+
+- [x] Fase 6: Network Plugin (Flannel CNI)
+  - Flannel v0.28.7 instalado como DaemonSet
+  - kube-proxy configurado (conntrack deshabilitado para LXC)
+  - Ambos nodos Ready
+
+- [x] Fase 7: Unir Worker
+  - k8s-worker-1 unido al cluster via kubeadm join con config
+  - kube-proxy y flannel funcionando en worker
+
+### Cluster Info
+
+```
+kubectl get nodes
+NAME           STATUS   ROLES    AGE   VERSION
+k8s-master-1   Ready    <none>   19m   v1.36.2
+k8s-worker-1   Ready    <none>   7m    v1.36.2
+
+kubectl get pods -A
+NAMESPACE      NAME                                   READY   STATUS
+kube-flannel   kube-flannel-ds-xxx                    1/1     Running
+kube-system    etcd-k8s-master-1                      1/1     Running
+kube-system    kube-apiserver-k8s-master-1            1/1     Running
+kube-system    kube-controller-manager-k8s-master-1   1/1     Running
+kube-system    kube-proxy-xxx                         1/1     Running
+kube-system    kube-scheduler-k8s-master-1            1/1     Running
+```
+
 ### En Progreso 🔄
 
-- [ ] Fase 4: Instalación de Kubernetes
-
-### Pendiente ⏳
-
-- [ ] Fases 4-13: Instalación de Kubernetes y componentes avanzados
+- [ ] Fase 8: Almacenamiento Persistente
 
 ### Limitaciones Conocidas ⚠️
 
@@ -694,18 +793,62 @@ Ejecutar solo en `k8s-worker-1`:
   - Control-plane (D1): Requiere más CPU
   - Worker (D2): Puede funcionar con limitaciones
 
-- **Almacenamiento**: Partición raíz 100GB podría ser limitante
-  - Disco mecánico 465GB ideal para PVC (Persistent Volume Claims)
+- **Alimentación**: D2 no tiene SAI (conectado a protector contra picos)
+  - Apagar graceful del nodo worker ante corte eléctrico
+
+- **Kubernetes en LXC**: Se requieren configuraciones especiales
 
 ---
 
-## Recomendaciones Prioritarias
+## Troubleshooting: Kubernetes en LXC
 
-1. ✅ **Ampliación de RAM completada** — 8 GB por nodo (Dual Channel)
-2. ✅ **Fase 3 completada** — containerd instalado y validado en ambos contenedores
-3. **Continuar con Fase 4**: Instalación de Kubernetes
-4. **Monitoreo activo** de rendimiento durante despliegue inicial
-5. **Backups regulares** de configuración y etcd
+### Configuración necesaria para los contenedores LXC
+
+```bash
+# Habilitar nesting y modo privilegiado
+lxc config set k8s-master-1 security.nesting=true security.privileged=true
+lxc config set k8s-worker-1 security.nesting=true security.privileged=true
+lxc restart k8s-master-1 k8s-worker-1
+```
+
+### Después de reiniciar el contenedor
+
+```bash
+# Crear symlink persistente para /dev/kmsg
+echo "L! /dev/kmsg - - - - /dev/console" | tee /usr/lib/tmpfiles.d/kmsg.conf
+ln -sf /dev/console /dev/kmsg
+
+# Remontar /proc/sys como rw para kubelet
+mount -o remount,rw /proc/sys
+
+# Configurar kubelet para ignorar swap (swap virtual de LXC)
+# Añadir en InitConfiguration.nodeRegistration.kubeletExtraArgs:
+#   - name: "fail-swap-on"
+#     value: "false"
+# Y en KubeletConfiguration: localStorageCapacityIsolation: false
+```
+
+### Problemas conocidos (resueltos)
+
+| Problema | Causa | Solución |
+|----------|-------|----------|
+| `SystemVerification` - kernel config no disponible | LXC no expone `/proc/config.gz` | `--ignore-preflight-errors=SystemVerification` |
+| `failed to get rootfs info` | cAdvisor no reconoce device ZFS | `localStorageCapacityIsolation: false` en KubeletConfiguration |
+| `open /dev/kmsg: no such file or directory` | LXC no crea /dev/kmsg | Symlink a /dev/console + tmpfiles.d |
+| `running with swap on is not supported` | Swap virtual de LXC siempre activo | `failSwapOn: false` en KubeletConfiguration |
+| `can't get final child's PID from pipe: EOF` | runc no funciona en contenedor no privilegiado | `security.privileged=true` + `security.nesting=true` |
+| `open /proc/sys/vm/overcommit_memory: read-only` | /proc/sys montado ro en LXC | `mount -o remount,rw /proc/sys` |
+| `cluster-info ConfigMap not found` | kubeadm init no completó fase upload-config | `kubeadm init phase bootstrap-token` |
+| `kubelet-config ConfigMap not found` | No se subió configuración de kubelet | `kubeadm init phase upload-config kubelet` |
+| Bootstrap token sin permisos RBAC | Falta ClusterRoleBinding para system:bootstrappers | `kubectl create clusterrolebinding kubeadm-config-reader --clusterrole=cluster-admin --group=system:bootstrappers` |
+
+### Nota sobre el token de unión
+
+El token generado por `kubeadm token create --print-join-command` requiere que el ConfigMap `cluster-info` exista en `kube-public`. Si falta:
+
+```bash
+kubeadm init phase bootstrap-token
+```
 
 ---
 
