@@ -496,6 +496,34 @@ Ejecutar solo en `k8s-master-1`:
 
 ---
 
+### Fase 5.1️ | kubectl en el host D1
+
+**Objetivo**: Poder ejecutar `kubectl` desde el host sin entrar al contenedor.
+
+Ejecutar en **D1** (no dentro del contenedor):
+
+- [ ] Instalar kubectl en D1
+  ```bash
+  sudo snap install kubectl --classic
+  ```
+
+- [ ] Crear directorio kubeconfig y copiarlo desde el contenedor
+  ```bash
+  mkdir -p $HOME/.kube
+  sudo lxc exec k8s-master-1 -- cat /etc/kubernetes/super-admin.conf > $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+  ```
+
+- [ ] Verificar acceso al cluster desde D1
+  ```bash
+  kubectl get nodes
+  ```
+
+**Prerequisitos**: Fase 5 completada  
+**Duración Estimada**: 5 minutos
+
+---
+
 ### Fase 6️ | Network Plugin (CNI)
 
 **Objetivo**: Configurar red entre pods
