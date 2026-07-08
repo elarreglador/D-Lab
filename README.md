@@ -502,7 +502,7 @@ Ejecutar solo en `k8s-master-1`:
 
 Ejecutar en **D1** (no dentro del contenedor):
 
-- [ ] Instalar kubectl en D1
+- [x] Instalar kubectl en D1
   ```bash
   sudo snap install kubectl --classic
   ```
@@ -514,10 +514,30 @@ Ejecutar en **D1** (no dentro del contenedor):
   sudo chown $(id -u):$(id -g) $HOME/.kube/config
   ```
 
-- [ ] Verificar acceso al cluster desde D1
+- [x] Crear script wrapper para kubectl (solución para macvlan)
+  ```bash
+  mkdir -p $HOME/.local/bin
+  cat > $HOME/.local/bin/kubectl << 'EOF'
+  #!/bin/bash
+  exec lxc exec k8s-master-1 -- kubectl "$@"
+  EOF
+  chmod +x $HOME/.local/bin/kubectl
+  echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
+  export PATH=$HOME/.local/bin:$PATH
+  ```
+
+- [x] Verificar acceso al cluster desde D1
   ```bash
   kubectl get nodes
   ```
+  Resultado esperado:
+  ```
+  NAME           STATUS   ROLES    AGE   VERSION
+  k8s-master-1   Ready    <none>   5h    v1.36.2
+  k8s-worker-1   Ready    <none>   5h    v1.36.2
+  ```
+
+**Nota**: Con redes macvlan, el host NO puede contactar directamente al contenedor. El wrapper ejecuta kubectl dentro del contenedor vía `lxc exec`.
 
 **Prerequisitos**: Fase 5 completada  
 **Duración Estimada**: 5 minutos
