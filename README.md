@@ -624,31 +624,127 @@ Ejecutar en `k8s-worker-1`:
 
 ---
 
-### Fase 8️ | Almacenamiento Persistente
+### Fase 8️ | Almacenamiento Persistente (Longhorn)
 
-**Objetivo**: Configurar volúmenes persistentes
+**Objetivo**: Configurar volúmenes persistentes distribuidos con Longhorn
 
-- [ ] Particionar disco mecánico en D1
-  ```bash
-  lsblk
-  fdisk /dev/sda
-  mkfs.ext4 /dev/sda1
-  ```
-- [ ] Montar en `/mnt/data-d1`
-- [ ] Particionar disco mecánico en D2 (mismo procedimiento)
-  ```bash
-  mkfs.ext4 /dev/sda1
-  ```
-- [ ] Montar en `/mnt/data-d2`
-- [ ] Instalar local-path-provisioner en cluster
-  ```bash
-  kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
-  ```
-- [ ] Crear StorageClass personalizado
-- [ ] Validar con PVC de prueba
+#### 8.1 Particionar y montar discos mecánicos
 
-**Prerequisitos**: Fase 7 completada  
-**Duración Estimada**: 1-2 horas
+```bash
+# En D1
+lsblk
+fdisk /dev/sda      # crear partición única (tipo Linux)
+mkfs.ext4 /dev/sda1
+mkdir -p /mnt/data-d1
+mount /dev/sda1 /mnt/data-d1
+
+# En D2 (mismo procedimiento)
+fdisk /dev/sda
+mkfs.ext4 /dev/sda1
+mkdir -p /mnt/data-d2
+mount /dev/sda1 /mnt/data-d2
+```
+
+#### 8.2 Montar discos dentro de los contenedores LXC
+
+```bash
+# En el host D1
+lxc config device add k8s-master-1 data-d1 disk \
+  source=/mnt/data-d1 path=/mnt/data-d1
+
+# En el host D2
+lxc config device add k8s-worker-1 data-d2 disk \
+  source=/mnt/data-d2 path=/mnt/data-d2
+```
+
+#### 8.3 Instalar open-iscsi dentro de los contenedores
+
+```bash
+# Dentro de k8s-master-1
+apt update && apt install -y open-iscsi
+systemctl enable --now iscsid
+
+# Dentro de k8s-worker-1 (acceder via lxc exec desde D2 o SSH)
+lxc exec k8s-worker-1 -- apt update && lxc exec k8s-worker-1 -- apt install -y open-iscsi
+lxc exec k8s-worker-1 -- systemctl enable --now iscsid
+```
+
+#### 8.4 Desplegar Longhorn en el cluster
+
+```bash
+# Añadir repositorio Helm
+helm repo add longhorn https://charts.longhorn.io
+helm repo update
+
+# Instalar Longhorn en namespace longhorn-system
+kubectl create namespace longhorn-system
+helm install longhorn longhorn/longhorn \
+  --namespace longhorn-system \
+  --set persistence.defaultClass=true
+```
+
+#### 8.5 Verificar instalación
+
+```bash
+kubectl -n longhorn-system get pods -w
+# Esperar que todos los pods estén Running
+```
+
+#### 8.6 Configurar disco adicional en Longhorn UI
+
+Para que Longhorn use los discos mecánicos montados en `/mnt/data-d1` y `/mnt/data-d2`:
+
+- Acceder a Longhorn UI via `kubectl port-forward`
+  ```bash
+  kubectl port-forward -n longhorn-system svc/longhorn-frontend 8080:80
+  ```
+- `http://localhost:8080` → Node → Edit node → Añadir disco extra con ruta `/mnt/data-d1` (o `/mnt/data-d2`)
+- Opcionalmente deshabilitar el disco root del contenedor para evitar que Longhorn lo use
+
+#### 8.7 Validar con PVC de prueba
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-longhorn-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+  storageClassName: longhorn
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod
+spec:
+  volumes:
+    - name: test-vol
+      persistentVolumeClaim:
+        claimName: test-longhorn-pvc
+  containers:
+    - name: test-container
+      image: busybox
+      command: ["sleep", "3600"]
+      volumeMounts:
+        - name: test-vol
+          mountPath: /data
+EOF
+
+# Verificar que el pod escribe correctamente
+kubectl exec test-pod -- sh -c "echo \"Longhorn OK\" > /data/test.txt && cat /data/test.txt"
+kubectl delete pod test-pod
+kubectl delete pvc test-longhorn-pvc
+```
+
+**Prerequisitos**: Fase 7 completada, Helm instalado  
+**Duración Estimada**: 2-3 horas
 
 ---
 
@@ -739,7 +835,7 @@ Ejecutar en `k8s-worker-1`:
 
 - [ ] Considerar agregar tercer nodo (D3) para HA
 - [ ] Replicar etcd (3 nodos mínimo)
-- [ ] Configurar Longhorn para almacenamiento distribuido
+
 - [ ] Implementar Pod Disruption Budgets
 - [ ] Crear estrategia de disaster recovery
 
@@ -825,7 +921,7 @@ kube-system    kube-scheduler-k8s-master-1            1/1     Running
 
 ### En Progreso 🔄
 
-- [ ] Fase 8: Almacenamiento Persistente
+- [ ] Fase 8: Almacenamiento Persistente (Longhorn)
 
 ### Limitaciones Conocidas ⚠️
 
@@ -837,10 +933,12 @@ kube-system    kube-scheduler-k8s-master-1            1/1     Running
   - Control-plane (D1): Requiere más CPU
   - Worker (D2): Puede funcionar con limitaciones
 
-- **Alimentación**: D2 no tiene SAI (conectado a protector contra picos)
-  - Apagar graceful del nodo worker ante corte eléctrico
+- **Alimentación**: Ambos nodos disponen de SAI
+  - Apagar graceful del nodo worker ante corte eléctrico prolongado
 
 - **Kubernetes en LXC**: Se requieren configuraciones especiales
+
+- **Longhorn con 2 nodos**: Sin D3, la caída de un nodo degrada los volúmenes a read-only. Ambos nodos disponen de SAI, pero un fallo hardware o apagado manual dejaría el almacenamiento degradado hasta recuperar el nodo. Al añadir D3 se pueden configurar 3 réplicas para tolerancia total.
 
 ---
 
