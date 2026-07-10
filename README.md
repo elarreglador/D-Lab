@@ -889,30 +889,208 @@ kubectl exec test-pod -- sh -c 'date >> /data/timestamp.txt && cat /data/timesta
 
 ### Fase 9️ | Despliegues de Prueba
 
-**Objetivo**: Validar funcionamiento básico del cluster
+**Objetivo**: Validar funcionamiento del cluster: distribución de pods, persistencia con PVC, acceso cross-node y failover del almacenamiento.
 
-Antes de añadir capas de seguridad o monitoreo, conviene verificar que el cluster orquesta correctamente: despliegues, servicios, persistencia y distribución entre nodos. Un Nginx de prueba basta para validar el core.
+Con el almacenamiento distribuido GlusterFS + NFS-Ganesha operativo (Fase 8), esta fase verifica que el cluster orquesta correctamente pods entre nodos, que los datos persisten tras fallos y que el failover del NFS funciona sin pérdida de información.
 
-- [ ] Desplegar Nginx de prueba
-  ```bash
-  kubectl create deployment nginx --image=nginx
-  kubectl expose deployment nginx --port=80 --type=LoadBalancer
-  ```
-- [ ] Verificar distribución entre nodos
-  ```bash
-  kubectl get pods -o wide
-  ```
-- [ ] Probar persistencia
-  - Desplegar StatefulSet con PVC
-  - Verificar que datos persisten tras reinicio
-- [ ] Validar logs y eventos
-  ```bash
-  kubectl logs <pod>
-  kubectl describe pod <pod>
-  ```
+**Nota**: Se usa `type: NodePort` en vez de `LoadBalancer` porque el cluster no tiene un balanceador de carga externo. MetalLB se puede añadir en fases posteriores si se necesita una IP virtual para servicios.
+
+---
+
+#### 9.1 Desplegar Nginx stateless
+
+```bash
+kubectl create deployment nginx --image=nginx --replicas=3
+kubectl expose deployment nginx --port=80 --type=NodePort
+kubectl get pods -o wide
+```
+
+Verificar que los 3 pods se distribuyen entre ambos nodos. La salida debe mostrar pods en `k8s-master-1` y `k8s-worker-1`.
+
+---
+
+#### 9.2 StatefulSet con PVC persistente
+
+Desplegar un StatefulSet que escribe la hora cada 10 segundos en un volumen persistente:
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+  storageClassName: nfs-storage
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hello-storage
+spec:
+  serviceName: hello-storage
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-storage
+  template:
+    metadata:
+      labels:
+        app: hello-storage
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: writer
+        image: busybox
+        command:
+        - /bin/sh
+        - -c
+        - 'while true; do date >> /data/timestamps.log; sleep 10; done'
+        volumeMounts:
+        - name: data
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 100Mi
+      storageClassName: nfs-storage
+EOF
+```
+
+**Verificar persistencia**:
+
+```bash
+# Ver contenido inicial
+kubectl exec hello-storage-0 -- cat /data/timestamps.log | tail -5
+
+# Eliminar el pod
+kubectl delete pod hello-storage-0 --now
+
+# Esperar que el StatefulSet lo recrea automáticamente
+sleep 15
+kubectl get pod hello-storage-0
+
+# Los datos deben seguir ahí
+kubectl exec hello-storage-0 -- cat /data/timestamps.log | tail -5
+```
+
+---
+
+#### 9.3 Acceso cross-node al mismo PVC
+
+Verificar que un PVC puede ser montado por pods en distintos nodos:
+
+```bash
+# Pod en el nodo que quieras (el scheduler decide)
+kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cross-node-pod
+spec:
+  volumes:
+  - name: shared-vol
+    persistentVolumeClaim:
+      claimName: data-pvc
+  containers:
+  - name: writer
+    image: busybox
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: shared-vol
+      mountPath: /shared
+EOF
+
+kubectl get pod cross-node-pod -o wide
+
+# Escribir desde el pod
+kubectl exec cross-node-pod -- sh -c \
+  'echo "escrito desde $(hostname)" > /shared/cross-node.txt && cat /shared/cross-node.txt'
+
+# Verificar desde el StatefulSet (puede estar en otro nodo)
+kubectl exec hello-storage-0 -- cat /data/cross-node.txt
+```
+
+---
+
+#### 9.4 Probar failover del NFS
+
+Simular la caída del nodo que tiene el API Server y el NFS-Ganesha MASTER:
+
+```bash
+# 1. Escribir datos de referencia
+kubectl exec hello-storage-0 -- date >> /data/timestamps.log
+
+# 2. Detener D1 (pierdes kubectl)
+lxc stop k8s-master-1
+
+# 3. El pod en D2 sigue vivo y puede escribir (vía D2 host)
+lxc exec k8s-worker-1 -- cat /data/timestamps.log | tail -5
+
+# 4. Recuperar D1
+lxc start k8s-master-1
+
+# 5. Esperar que NFS-Ganesha se recupere (puede fallar al arrancar
+#    si GlusterFS no está listo aún → restart manual)
+systemctl restart nfs-ganesha
+
+# 6. Verificar datos intactos tras failback
+kubectl exec hello-storage-0 -- cat /data/timestamps.log | tail -5
+```
+
+**Nota sobre failback**: Al recuperar D1, el VIP vuelve a D1 y el NFS-Ganesha local
+debe reexportar el volumen. Si arranca antes que GlusterFS, falla con
+`Unable to initialize volume` y `showmount -e` aparece vacío. Solución:
+`systemctl restart nfs-ganesha` en D1 tras confirmar que GlusterFS está conectado
+(`gluster peer status`). Además, los pods existentes montados vía NFS pueden
+quedar con `Stale file handle` al migrar el VIP de vuelta; eliminar y
+dejar que el controlador (Deployment/StatefulSet) los recrea.
+
+---
+
+#### 9.5 Verificar replicación en GlusterFS
+
+Comprobar que los datos escritos existen en ambos bricks:
+
+```bash
+# Obtener el PV name
+PV_NAME=$(kubectl get pvc data-pvc -o jsonpath='{.spec.volumeName}')
+
+# En D1
+ls /mnt/data/brick/default-data-pvc-${PV_NAME}/
+cat /mnt/data/brick/default-data-pvc-${PV_NAME}/timestamps.log | tail -3
+
+# En D2
+lxc exec k8s-worker-1 -- \
+  cat /mnt/data/brick/default-data-pvc-${PV_NAME}/timestamps.log | tail -3
+```
+
+Ambos deben mostrar el mismo contenido.
+
+---
+
+#### 9.6 Limpiar recursos de prueba
+
+```bash
+kubectl delete deployment nginx
+kubectl delete service nginx
+kubectl delete statefulset hello-storage
+kubectl delete pvc data-pvc
+kubectl delete pod cross-node-pod
+```
+
+---
 
 **Prerequisitos**: Fase 8 completada  
-**Duración Estimada**: 30 minutos
+**Duración Estimada**: 1-2 horas
 
 ---
 
@@ -1071,6 +1249,7 @@ kube-system    kube-scheduler-k8s-master-1            1/1     Running
 ### En Progreso 🔄
 
 - [x] Fase 8: Almacenamiento Persistente (GlusterFS + NFS-Ganesha)
+- [x] Fase 9: Despliegues de Prueba
 
 ### Limitaciones Conocidas ⚠️
 
