@@ -644,100 +644,191 @@ Ejecutar en `k8s-worker-1`:
 
 ---
 
-### Fase 8️ | Almacenamiento Persistente (Longhorn)
+### Fase 8️ | Almacenamiento Persistente Distribuido (GlusterFS + NFS-Ganesha + Keepalived)
 
-**Objetivo**: Configurar volúmenes persistentes distribuidos con Longhorn
+**Objetivo**: Configurar volúmenes persistentes con alta disponibilidad usando GlusterFS replicado.
 
-Los pods son efímeros por diseño: al reiniciarse pierden todo su almacenamiento local. Longhorn provee volúmenes persistentes distribuidos que replican los datos entre nodos, permitiendo que los pods mantengan su estado incluso si migran de nodo o se recuperan tras un fallo.
+Longhorn y Rook/Ceph fallaron en este entorno LXC:
+- **Longhorn**: `iscsid` crashea (`sendmsg: bug? ctrl_fd 4`) en kernel 7.0.0-27 dentro de LXC.
+- **Rook/Ceph**: Los dispositivos de bloque LXD no son visibles dentro de pods Kubernetes (`/dev` es tmpfs).
 
-#### 8.1 Particionar y montar discos mecánicos
+**Solución**: GlusterFS replica datos entre nodos via FUSE (userspace, sin módulos de kernel problemáticos). Se exporta como NFS via NFS-Ganesha y se usa un VIP con Keepalived para failover automático.
 
+**Arquitectura**:
+```
+Pod PVC → nfs-subdir-external-provisioner → VIP 192.168.1.30 (Keepalived)
+                                                            │
+                              ┌─────────────────────────────┼─────────────────────────────┐
+                              │ D1 (MASTER) 192.168.1.21    │ D2 (BACKUP) 192.168.1.22   │
+                              │ nfs-ganesha                 │ nfs-ganesha                 │
+                              │   └── libgfapi ─────────────┼── libgfapi                  │
+                              │ glusterd ◄─── replica 2 ───►│ glusterd                    │
+                              │   └── /mnt/data/brick       │   └── /mnt/data/brick       │
+                              │        └── /dev/sda1 (HDD)  │        └── /dev/sda1 (HDD)  │
+                              └─────────────────────────────┘─────────────────────────────┘
+```
+
+#### 8.1 Detener NFS kernel server y preparar bricks
+
+```bash
+# En k8s-master-1
+systemctl stop nfs-kernel-server
+systemctl disable nfs-kernel-server
+mkdir -p /mnt/data/brick
+
+# En k8s-worker-1
+mkdir -p /mnt/data/brick
+```
+
+#### 8.2 Instalar dependencias en ambos contenedores
+
+```bash
+# En k8s-master-1 y k8s-worker-1
+apt update && apt install -y glusterfs-server nfs-ganesha nfs-ganesha-gluster keepalived
+```
+
+#### 8.3 Crear trusted pool GlusterFS
+
+```bash
+# En k8s-master-1
+gluster peer probe 192.168.1.22
+gluster peer status
+```
+
+#### 8.4 Crear volumen replicado
+
+```bash
+# En k8s-master-1
+gluster volume create vol-storage replica 2 \
+  192.168.1.21:/mnt/data/brick \
+  192.168.1.22:/mnt/data/brick force
+gluster volume start vol-storage
+gluster volume info vol-storage
+```
+
+#### 8.5 Configurar NFS-Ganesha en ambos nodos
+
+`/etc/ganesha/ganesha.conf` (idéntico en ambos nodos):
+
+```ini
+NFS_CORE_PARAM {
+    Protocols = 3,4;
+    mount_path_pseudo = true;
+}
+EXPORT {
+    Export_Id = 1;
+    Path = "/vol-storage";
+    Pseudo = "/vol-storage";
+    Access_Type = RW;
+    Squash = No_Root_Squash;
+        FSAL {
+            Name = GLUSTER;
+            volume = "vol-storage";
+            hostname = "localhost";
+        }
+}
+```
+
+```bash
+# En ambos nodos
+systemctl enable --now nfs-ganesha
+systemctl status nfs-ganesha
+```
+
+#### 8.6 Configurar Keepalived (VIP 192.168.1.30)
+
+**En D1 (k8s-master-1)** — `/etc/keepalived/keepalived.conf`:
+
+```bash
+cat > /etc/keepalived/keepalived.conf << 'EOF'
+vrrp_instance VI_1 {
+    state MASTER
+    interface eth0
+    virtual_router_id 51
+    priority 150
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass labcluster
+    }
+    virtual_ipaddress {
+        192.168.1.30/24
+    }
+}
+EOF
+```
+
+**En D2 (k8s-worker-1)** — mismo archivo pero `state BACKUP` y `priority 100`:
+
+```bash
+cat > /etc/keepalived/keepalived.conf << 'EOF'
+vrrp_instance VI_1 {
+    state BACKUP
+    interface eth0
+    virtual_router_id 51
+    priority 100
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass labcluster
+    }
+    virtual_ipaddress {
+        192.168.1.30/24
+    }
+}
+EOF
+```
+
+```bash
+# En ambos nodos
+systemctl enable --now keepalived
+```
+
+**Verificar VIP**:
+
+```bash
+# En D1 (MASTER) — debe tener la VIP
+ip addr show eth0 | grep 192.168.1.30
+# En D2 (BACKUP) — NO debe tenerla aún
+ip addr show eth0 | grep 192.168.1.30
+```
+
+Probar failover:
 ```bash
 # En D1
-lsblk
-fdisk /dev/sda      # crear partición única (tipo Linux)
-mkfs.ext4 /dev/sda1
-mkdir -p /mnt/data-d1
-mount /dev/sda1 /mnt/data-d1
-
-# En D2 (mismo procedimiento)
-fdisk /dev/sda
-mkfs.ext4 /dev/sda1
-mkdir -p /mnt/data-d2
-mount /dev/sda1 /mnt/data-d2
+systemctl stop keepalived
+# En D2 — ahora debe tener la VIP
+ip addr show eth0 | grep 192.168.1.30
+# Restaurar en D1
+systemctl start keepalived
 ```
 
-#### 8.2 Montar discos dentro de los contenedores LXC
+#### 8.7 Migrar NFS provisioner a la VIP
 
 ```bash
-# En el host D1
-lxc config device add k8s-master-1 data-d1 disk \
-  source=/mnt/data-d1 path=/mnt/data-d1
-
-# En el host D2
-lxc config device add k8s-worker-1 data-d2 disk \
-  source=/mnt/data-d2 path=/mnt/data-d2
+helm upgrade nfs-subdir-external-provisioner nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
+  --namespace nfs-storage \
+  --reuse-values \
+  --set nfs.server=192.168.1.30 \
+  --set nfs.path=/vol-storage \
+  --set nfs.mountOptions="{nfsvers=3}"
 ```
 
-#### 8.3 Instalar open-iscsi dentro de los contenedores
-
-```bash
-# Dentro de k8s-master-1
-apt update && apt install -y open-iscsi
-systemctl enable --now iscsid
-
-# Dentro de k8s-worker-1 (acceder via lxc exec desde D2 o SSH)
-lxc exec k8s-worker-1 -- apt update && lxc exec k8s-worker-1 -- apt install -y open-iscsi
-lxc exec k8s-worker-1 -- systemctl enable --now iscsid
-```
-
-#### 8.4 Desplegar Longhorn en el cluster
-
-```bash
-# Añadir repositorio Helm
-helm repo add longhorn https://charts.longhorn.io
-helm repo update
-
-# Instalar Longhorn en namespace longhorn-system
-kubectl create namespace longhorn-system
-helm install longhorn longhorn/longhorn \
-  --namespace longhorn-system \
-  --set persistence.defaultClass=true
-```
-
-#### 8.5 Verificar instalación
-
-```bash
-kubectl -n longhorn-system get pods -w
-# Esperar que todos los pods estén Running
-```
-
-#### 8.6 Configurar disco adicional en Longhorn UI
-
-Para que Longhorn use los discos mecánicos montados en `/mnt/data-d1` y `/mnt/data-d2`:
-
-- Acceder a Longhorn UI via `kubectl port-forward`
-  ```bash
-  kubectl port-forward -n longhorn-system svc/longhorn-frontend 8080:80
-  ```
-- `http://localhost:8080` → Node → Edit node → Añadir disco extra con ruta `/mnt/data-d1` (o `/mnt/data-d2`)
-- Opcionalmente deshabilitar el disco root del contenedor para evitar que Longhorn lo use
-
-#### 8.7 Validar con PVC de prueba
+#### 8.8 Validar con PVC de prueba
 
 ```bash
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: test-longhorn-pvc
+  name: test-gluster-pvc
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
       storage: 100Mi
-  storageClassName: longhorn
+  storageClassName: nfs-storage
 EOF
 
 kubectl apply -f - <<EOF
@@ -749,7 +840,7 @@ spec:
   volumes:
     - name: test-vol
       persistentVolumeClaim:
-        claimName: test-longhorn-pvc
+        claimName: test-gluster-pvc
   containers:
     - name: test-container
       image: busybox
@@ -759,14 +850,40 @@ spec:
           mountPath: /data
 EOF
 
-# Verificar que el pod escribe correctamente
-kubectl exec test-pod -- sh -c "echo \"Longhorn OK\" > /data/test.txt && cat /data/test.txt"
-kubectl delete pod test-pod
-kubectl delete pvc test-longhorn-pvc
+kubectl exec test-pod -- sh -c \
+  'echo "GlusterFS OK" > /data/test.txt && cat /data/test.txt'
+```
+
+#### 8.9 Probar failover
+
+```bash
+# 1. Escribir un timestamp desde el pod
+kubectl exec test-pod -- sh -c 'date > /data/timestamp.txt && cat /data/timestamp.txt'
+
+# 2. Matar D1 (desde el host D1)
+lxc stop k8s-master-1
+
+# 3. Verificar que el pod sigue accesible (puede tardar ~30s en reprogramarse)
+kubectl exec test-pod -- cat /data/timestamp.txt
+
+# 4. Recuperar D1
+lxc start k8s-master-1
+
+# 5. Escribir desde el pod de nuevo (tras reconexión)
+kubectl exec test-pod -- sh -c 'date >> /data/timestamp.txt && cat /data/timestamp.txt'
 ```
 
 **Prerequisitos**: Fase 7 completada, Helm instalado  
-**Duración Estimada**: 2-3 horas
+**Duración Estimada**: 1-2 horas
+
+#### Incidencias durante la implementación
+
+| Problema | Causa | Solución |
+|----------|-------|----------|
+| `mkdir: Bad message` en `/mnt/data` | Filesystem ext4 corrupto en D2 tras escrituras previas | `mkfs.ext4 -F /dev/sda1` (no había datos importantes) |
+| NFS-Ganesha: `No export entries found` y `Incorrect or missing parameters for export` | El parámetro `volume_name` no es válido en FSAL GLUSTER; debe usarse `volume` | Cambiar `volume_name = "vol-storage"` → `volume = "vol-storage"` en `/etc/ganesha/ganesha.conf` |
+| NFS mount falla con `mount system call failed` | NFSv4 requiere Kerberos en NFS-Ganesha sin configuración adicional | Forzar NFSv3 con `mountOptions: {nfsvers=3}` en el Helm chart del provisioner |
+| D2 sin acceso a kubectl tras failover | API Server solo corre en D1; D2 no tiene kubeconfig configurado | Esperado — el cluster tiene un solo control-plane. Los pods existentes en D2 continúan funcionando y accediendo al NFS sin interrupción |
 
 ---
 
@@ -953,7 +1070,7 @@ kube-system    kube-scheduler-k8s-master-1            1/1     Running
 
 ### En Progreso 🔄
 
-- [ ] Fase 8: Almacenamiento Persistente (Longhorn)
+- [x] Fase 8: Almacenamiento Persistente (GlusterFS + NFS-Ganesha)
 
 ### Limitaciones Conocidas ⚠️
 
@@ -970,7 +1087,7 @@ kube-system    kube-scheduler-k8s-master-1            1/1     Running
 
 - **Kubernetes en LXC**: Se requieren configuraciones especiales
 
-- **Longhorn con 2 nodos**: Sin D3, la caída de un nodo degrada los volúmenes a read-only. Ambos nodos disponen de SAI, pero un fallo hardware o apagado manual dejaría el almacenamiento degradado hasta recuperar el nodo. Al añadir D3 se pueden configurar 3 réplicas para tolerancia total.
+- **GlusterFS con 2 nodos y replica 2**: El volumen replica 2 sobrevive la caída de un nodo (el otro sigue sirviendo). Sin embargo, ningún nodo puede caer permanentemente sin dejar el volumen degradado. Al añadir D3 se migrará a disperse (erasure code) para ~1TB usable con tolerancia a 1 fallo.
 
 ---
 
