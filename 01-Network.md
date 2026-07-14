@@ -135,7 +135,35 @@ sudo apt install wireguard wireguard-tools -y
 
 ## Configuración por Equipo
 
-Para D1, utiliza la siguiente configuración en `/etc/wireguard/wg0.conf`:
+### Servidor WireGuard (DV0 - VM IONOS)
+
+DV0 actúa como servidor WireGuard en `82.223.50.169:51820`, con IP interna `10.8.0.1/24`.
+
+**Clave pública del servidor**: `CTKG9WRfdUnR09llG6U1OTpmuNaEMKjtuaxhPfv9AFM=`
+
+Configuración del servidor en `/etc/wireguard/wg0.conf`:
+
+```ini
+[Interface]
+Address = 10.8.0.1/24, fd42:42:42::1/64
+ListenPort = 51820
+PrivateKey = <PRIVADA_DV0>
+
+PostUp = iptables -I INPUT -p udp --dport 51820 -j ACCEPT
+PostUp = iptables -I FORWARD -i ens6 -o wg0 -j ACCEPT
+PostUp = iptables -I FORWARD -i wg0 -j ACCEPT
+PostUp = iptables -t nat -A POSTROUTING -o ens6 -j MASQUERADE
+PostDown = iptables -D INPUT -p udp --dport 51820 -j ACCEPT
+PostDown = iptables -D FORWARD -i ens6 -o wg0 -j ACCEPT
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -o ens6 -j MASQUERADE
+```
+
+### Clientes WireGuard
+
+Los configs actualizados están en `files/` del proyecto.
+
+#### D1 (`files/wg0-client-d1.conf`)
 
 ```ini
 [Interface]
@@ -144,14 +172,26 @@ Address = 10.8.0.11/32,fd42:42:42::11/128
 DNS = 10.8.0.1,1.8.0.1
 
 [Peer]
-PublicKey = <SERVER_PUBLIC_KEY_OLD>
+PublicKey = <SERVER_PUBLIC_KEY>
 PresharedKey = <PRESHARED_KEY_D1>
 Endpoint = 82.223.50.169:51820
 AllowedIPs = 0.0.0.0/0,::/0
 ```
 
-Para D2, la configuración es idéntica excepto por la dirección de la interfaz:
-- Address = `10.8.0.12/32,fd42:42:42::12/128`
+#### D2 (`files/wg0-client-d2.conf`)
+
+```ini
+[Interface]
+PrivateKey = <PRIVATE_KEY_D2>
+Address = 10.8.0.12/32,fd42:42:42::12/128
+DNS = 10.8.0.1,1.8.0.1
+
+[Peer]
+PublicKey = <SERVER_PUBLIC_KEY>
+PresharedKey = <PRESHARED_KEY_D2>
+Endpoint = 82.223.50.169:51820
+AllowedIPs = 0.0.0.0/0,::/0
+```
 
 ## Aplicación de la Configuración
 

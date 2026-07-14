@@ -20,19 +20,23 @@ Proyecto de virtualización y orquestación de contenedores usando LXC (Linux Co
 El cluster está diseñado con la siguiente estructura:
 
 ```
-Internet (Router ZTE H3600P - 192.168.1.1)
+Internet (elarreglador.eu → 82.223.50.169)
     ↓
-Switch Mercusys MS105G (10 Gbps)
-    ├── D1 (Control-Plane) - 192.168.1.11
+DV0 (Jumpbox / VPN Server) - VM IONOS
+    │ WireGuard VPN (10.8.0.0/24)
+    │
+    ├── D1 (Control-Plane) - 192.168.1.11 (10.8.0.11)
     │   └── k8s-master-1 (LXC) - 192.168.1.21
     │
-    └── D2 (Worker) - 192.168.1.12
+    └── D2 (Worker) - 192.168.1.12 (10.8.0.12)
         └── k8s-worker-1 (LXC) - 192.168.1.22
 ```
 
-**Topología de Red**: Ethernet dedicada, sin WiFi  
+**Topología de Red**: Ethernet dedicada + VPN WireGuard  
+**Acceso Externo**: vía DV0 (elarreglador.eu) - SSH/WireGuard  
 **Control-Plane**: D1 con contenedor k8s-master-1  
 **Worker**: D2 con contenedor k8s-worker-1  
+**Jumpbox**: DV0 con kubectl + lxc client para gestión remota  
 
 ---
 
@@ -114,6 +118,24 @@ nvme0n1         238,5G
 
 ---
 
+### DV0 - Nodo de Gestión (VM IONOS)
+
+Máquina virtual en IONOS para acceso externo al cluster:
+
+| Componente | Especificación |
+|-----------|---------------|
+| **CPU** | 1 vCPU Intel Xeon (Skylake, IBRS) |
+| **RAM** | 512 MiB |
+| **Almacenamiento** | 8.6 GB root (vda1) + 2 GB swap |
+| **Red** | VirtIO NIC (ens6) - 82.223.50.169/32 |
+| **SO** | Ubuntu Server 26.04 LTS |
+| **Dominio** | elarreglador.eu |
+| **VPN** | WireGuard (10.8.0.1/24, puerto 51820) |
+| **Herramientas** | kubectl v1.32, lxd client |
+| **Rol** | Jumpbox / VPN Server / Gestión remota |
+
+---
+
 ## Tecnologías
 
 ### Virtualización
@@ -154,6 +176,10 @@ nvme0n1         238,5G
 | [incidentes/ssh_socket.md](./incidentes/ssh_socket.md) | Análisis y resolución del conflicto entre ssh.socket y ssh.service |
 | [incidentes/network-pcie-aspm.md](./incidentes/network-pcie-aspm.md) | NIC no responde ARP por ASPM + driver r8169 — solución con pcie_aspm=off |
 | [incidentes/ip-dinamica-netplan.md](./incidentes/ip-dinamica-netplan.md) | IPs DHCP secundarias por conflicto netplan — solución: eliminar 50-cloud-init.yaml |
+| [files/wg0-client-d1.conf](./files/wg0-client-d1.conf) | Configuración WireGuard para D1 |
+| [files/wg0-client-d2.conf](./files/wg0-client-d2.conf) | Configuración WireGuard para D2 |
+| [files/setup-d1-d2.sh](./files/setup-d1-d2.sh) | Script para configurar WireGuard + clave SSH en D1/D2 |
+| [files/dv0-ssh-pubkey.txt](./files/dv0-ssh-pubkey.txt) | Clave pública SSH de DV0 para D1/D2 |
 
 ---
 
@@ -1195,6 +1221,7 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
   - D2: 2 × Micron 4GB (nuevos) = 8GB
   - Ambos en Dual Channel
 
+<<<<<<< HEAD
 - [x] Fase 2.3: Cluster LXD
   - D1 y D2 unificados en un mismo cluster LXD
   - `lxc cluster list` muestra ambos nodos (D1 leader, D2 standby)
@@ -1228,28 +1255,22 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
   - k8s-worker-1 unido al cluster via kubeadm join con config
   - kube-proxy y flannel funcionando en worker
 
-### Cluster Info
-
-```
-kubectl get nodes
-NAME           STATUS   ROLES    AGE   VERSION
-k8s-master-1   Ready    <none>   19m   v1.36.2
-k8s-worker-1   Ready    <none>   7m    v1.36.2
-
-kubectl get pods -A
-NAMESPACE      NAME                                   READY   STATUS
-kube-flannel   kube-flannel-ds-xxx                    1/1     Running
-kube-system    etcd-k8s-master-1                      1/1     Running
-kube-system    kube-apiserver-k8s-master-1            1/1     Running
-kube-system    kube-controller-manager-k8s-master-1   1/1     Running
-kube-system    kube-proxy-xxx                         1/1     Running
-kube-system    kube-scheduler-k8s-master-1            1/1     Running
-```
-
+- [x] Nodo de Gestión DV0
+  - VM IONOS (Ubuntu 26.04) con dominio elarreglador.eu
+  - WireGuard VPN server reinstaurado (10.8.0.1/24, puerto 51820)
+  - kubectl v1.32 instalado
+  - LXD client instalado
+  - Clave SSH generada para acceso a D1/D2
+  - Configs WireGuard para D1/D2 actualizados en files/
 ### En Progreso 🔄
 
 - [x] Fase 8: Almacenamiento Persistente (GlusterFS + NFS-Ganesha)
 - [x] Fase 9: Despliegues de Prueba
+- [ ] D1/D2: Actualizar config WireGuard y autorizar clave SSH de DV0
+
+### Pendiente ⏳
+
+- [ ] Fases 4-13: Instalación de Kubernetes y componentes avanzados (las fases 4-9 ya están completadas en las ramas remotas)
 
 ### Limitaciones Conocidas ⚠️
 
@@ -1272,6 +1293,7 @@ kube-system    kube-scheduler-k8s-master-1            1/1     Running
 
 ## Troubleshooting: Kubernetes en LXC
 
+<<<<<<< HEAD
 ### Configuración necesaria para los contenedores LXC
 
 ```bash
