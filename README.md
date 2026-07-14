@@ -176,10 +176,10 @@ Máquina virtual en IONOS para acceso externo al cluster:
 | [incidentes/ssh_socket.md](./incidentes/ssh_socket.md) | Análisis y resolución del conflicto entre ssh.socket y ssh.service |
 | [incidentes/network-pcie-aspm.md](./incidentes/network-pcie-aspm.md) | NIC no responde ARP por ASPM + driver r8169 — solución con pcie_aspm=off |
 | [incidentes/ip-dinamica-netplan.md](./incidentes/ip-dinamica-netplan.md) | IPs DHCP secundarias por conflicto netplan — solución: eliminar 50-cloud-init.yaml |
-| [files/wg0-client-d1.conf](./files/wg0-client-d1.conf) | Configuración WireGuard para D1 |
-| [files/wg0-client-d2.conf](./files/wg0-client-d2.conf) | Configuración WireGuard para D2 |
-| [files/setup-d1-d2.sh](./files/setup-d1-d2.sh) | Script para configurar WireGuard + clave SSH en D1/D2 |
-| [files/dv0-ssh-pubkey.txt](./files/dv0-ssh-pubkey.txt) | Clave pública SSH de DV0 para D1/D2 |
+| [files/wg0-client-d1.conf](./files/wg0-client-d1.conf) | Plantilla WireGuard para D1 (rellenar con claves reales) |
+| [files/wg0-client-d2.conf](./files/wg0-client-d2.conf) | Plantilla WireGuard para D2 (rellenar con claves reales) |
+| [files/setup-d1-d2.sh](./files/setup-d1-d2.sh) | Script de configuración para D1/D2 |
+| [files/dv0-ssh-pubkey.txt](./files/dv0-ssh-pubkey.txt) | Instrucciones para obtener clave pública de DV0 |
 
 ---
 
@@ -1261,12 +1261,12 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
   - kubectl v1.32 instalado
   - LXD client instalado
   - Clave SSH generada para acceso a D1/D2
-  - Configs WireGuard para D1/D2 actualizados en files/
+  - Plantillas WireGuard para D1/D2 en files/ (claves reales en backup local)
 ### En Progreso 🔄
 
 - [x] Fase 8: Almacenamiento Persistente (GlusterFS + NFS-Ganesha)
 - [x] Fase 9: Despliegues de Prueba
-- [ ] D1/D2: Actualizar config WireGuard y autorizar clave SSH de DV0
+- [x] D1/D2: WireGuard actualizado y conectado a DV0 + clave SSH autorizada
 
 ### Pendiente ⏳
 

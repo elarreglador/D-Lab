@@ -1,6 +1,11 @@
 #!/bin/bash
 # Script para configurar WireGuard en D1/D2 y autorizar clave SSH de DV0
 # Ejecutar en cada nodo (D1 y D2) cuando tengas acceso local o por SSH
+#
+# PREREQUISITO: Copiar el config correspondiente (wg0-client-d1.conf o
+# wg0-client-d2.conf) con las claves reales antes de ejecutar este script.
+# Los archivos .conf en este repo son plantillas; las claves reales están
+# en ~/server/wireguard/ (fuera del repo).
 
 set -e
 
@@ -27,7 +32,7 @@ echo "=== Configurando $NODE ==="
 # 1. Instalar WireGuard
 sudo apt-get install -y wireguard wireguard-tools
 
-# 2. Copiar config WireGuard
+# 2. Copiar config WireGuard (¡debe contener claves reales!)
 sudo cp "$CONFIG_FILE" /etc/wireguard/wg0.conf
 sudo chmod 600 /etc/wireguard/wg0.conf
 
@@ -41,10 +46,10 @@ sleep 3
 ping -c 2 10.8.0.1
 
 # 5. Autorizar clave SSH de DV0
+# Obtener la clave pública: ssh elarreglador@dv0 "cat ~/.ssh/id_ed25519.pub"
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
-cat >> ~/.ssh/authorized_keys << 'EOF'
-<DV0_SSH_PUBLIC_KEY>
-EOF
+echo "Agrega aquí la clave pública de DV0 en ~/.ssh/authorized_keys"
+echo "Ejecuta: ssh elarreglador@elarreglador.eu 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys"
 
 echo "=== $NODE configurado correctamente ==="
 echo "IP WireGuard: $NODE_IP"

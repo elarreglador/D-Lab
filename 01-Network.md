@@ -139,8 +139,6 @@ sudo apt install wireguard wireguard-tools -y
 
 DV0 actúa como servidor WireGuard en `82.223.50.169:51820`, con IP interna `10.8.0.1/24`.
 
-**Clave pública del servidor**: `CTKG9WRfdUnR09llG6U1OTpmuNaEMKjtuaxhPfv9AFM=`
-
 Configuración del servidor en `/etc/wireguard/wg0.conf`:
 
 ```ini
