@@ -36,7 +36,7 @@ DV0 (Jumpbox / VPN Server) - VM IONOS
 **Acceso Externo**: vía DV0 (elarreglador.eu) - SSH/WireGuard  
 **Control-Plane**: D1 con contenedor k8s-master-1  
 **Worker**: D2 con contenedor k8s-worker-1  
-**Jumpbox**: DV0 con kubectl + lxc client para gestión remota  
+**Jumpbox**: DV0 con kubectl + lxc client para gestión remota (vía WireGuard)  
 
 ---
 
@@ -180,6 +180,7 @@ Máquina virtual en IONOS para acceso externo al cluster:
 | [files/wg0-client-d2.conf](./files/wg0-client-d2.conf) | Plantilla WireGuard para D2 (rellenar con claves reales) |
 | [files/setup-d1-d2.sh](./files/setup-d1-d2.sh) | Script de configuración para D1/D2 |
 | [files/dv0-ssh-pubkey.txt](./files/dv0-ssh-pubkey.txt) | Instrucciones para obtener clave pública de DV0 |
+| [01-Network.md#gestión-remota-desde-dv0](./01-Network.md#gestión-remota-desde-dv0) | Configuración de kubectl y lxc remote en DV0 |
 
 ---
 
@@ -1221,7 +1222,6 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
   - D2: 2 × Micron 4GB (nuevos) = 8GB
   - Ambos en Dual Channel
 
-<<<<<<< HEAD
 - [x] Fase 2.3: Cluster LXD
   - D1 y D2 unificados en un mismo cluster LXD
   - `lxc cluster list` muestra ambos nodos (D1 leader, D2 standby)
@@ -1258,10 +1258,11 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
 - [x] Nodo de Gestión DV0
   - VM IONOS (Ubuntu 26.04) con dominio elarreglador.eu
   - WireGuard VPN server reinstaurado (10.8.0.1/24, puerto 51820)
-  - kubectl v1.32 instalado
-  - LXD client instalado
+  - kubectl v1.32 instalado y configurado (kubeconfig vía LXC proxy)
+  - LXD client instalado y configurado (remote a D2 vía WireGuard)
   - Clave SSH generada para acceso a D1/D2
   - Plantillas WireGuard para D1/D2 en files/ (claves reales en backup local)
+  - LXC proxy device en D1: 10.8.0.11:6443 → k8s-master-1:6443
 ### En Progreso 🔄
 
 - [x] Fase 8: Almacenamiento Persistente (GlusterFS + NFS-Ganesha)
@@ -1293,7 +1294,6 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
 
 ## Troubleshooting: Kubernetes en LXC
 
-<<<<<<< HEAD
 ### Configuración necesaria para los contenedores LXC
 
 ```bash

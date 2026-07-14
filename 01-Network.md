@@ -284,3 +284,85 @@ sess_token = r.json()["sess_token"]
 
 Una vez autenticado, la página principal (`/`) muestra una tabla con los dispositivos conectados (Nombre, MAC, IPv4, IPv6). Los dispositivos cableados (LAN) aparecen en la misma lista que los WiFi.
 
+---
+
+# Gestión Remota desde DV0
+
+DV0 actúa como jumpbox para gestionar el cluster de forma remota. Desde DV0 se puede acceder a Kubernetes y LXD a través del túnel WireGuard.
+
+## kubectl en DV0
+
+### LXC Proxy Device (API Server)
+
+El API Server de Kubernetes corre en `k8s-master-1` (192.168.1.21:6443). Como los contenedores usan macvlan, D1 no puede alcanzar directamente a su propio contenedor. Para exponer el API Server a través de la VPN WireGuard, se añadió un **LXC proxy device** en D1:
+
+```bash
+# En D1: reenviar puerto 6443 de la IP WireGuard al contenedor
+lxc config device add k8s-master-1 proxy6443 proxy \
+  connect=tcp:127.0.0.1:6443 listen=tcp:10.8.0.11:6443
+```
+
+Esto hace que D1 escuche en `10.8.0.11:6443` (su IP WireGuard) y reenvíe todo el tráfico a `k8s-master-1:6443`.
+
+### Configurar kubeconfig en DV0
+
+```bash
+# Obtener el kubeconfig desde k8s-master-1 (vía D1)
+ssh -p 9622 elarreglador@10.8.0.11 \
+  "lxc exec k8s-master-1 -- cat /etc/kubernetes/admin.conf" \
+  > ~/.kube/config
+
+# Ajustar permisos
+chmod 600 ~/.kube/config
+
+# Cambiar el server para que apunte a la IP WireGuard de D1
+kubectl config set-cluster kubernetes \
+  --server=https://10.8.0.11:6443 \
+  --insecure-skip-tls-verify=true
+```
+
+> **Nota**: Se usa `--insecure-skip-tls-verify` porque el certificado del API Server fue emitido para `192.168.1.21`, no para `10.8.0.11`.
+
+### Verificación
+
+```bash
+kubectl get nodes
+kubectl get pods -A
+```
+
+## LXC (lxd client) en DV0
+
+DV0 tiene instalado el cliente LXD via snap, que permite gestionar el cluster LXD de D1/D2 de forma remota.
+
+### Grupo LXD
+
+El usuario `elarreglador` debe pertenecer al grupo `lxd`:
+
+```bash
+sudo usermod -aG lxd elarreglador
+# Cerrar sesión y volver a entrar, o usar:
+sg lxd -c "lxc version"
+```
+
+### Añadir Remote LXD
+
+La API de LXD en D2 solo escuchaba en la IP LAN (`192.168.1.12:8443`). Se cambió para escuchar en todas las interfaces:
+
+```bash
+# En D2
+lxc config set core.https_address [::]:8443
+```
+
+Desde DV0 se añade D2 como remote:
+
+```bash
+lxc remote add d2 10.8.0.12:8443 --password <CLAVE_SUDO> --accept-certificate
+```
+
+### Verificación
+
+```bash
+lxc list d2:
+lxc exec d2:k8s-worker-1 -- kubectl get nodes
+```
+
