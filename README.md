@@ -25,17 +25,20 @@ Internet (elarreglador.eu → 82.223.50.169)
 DV0 (Jumpbox / VPN Server) - VM IONOS
     │ WireGuard VPN (10.8.0.0/24)
     │
-    ├── D1 (Control-Plane) - 192.168.1.11 (10.8.0.11)
-    │   └── k8s-master-1 (LXC) - 192.168.1.21
+    ├── D1 - 192.168.1.11 (10.8.0.11)
+    │   ├── k8s-master-1 (LXC) - 192.168.1.21  ← control-plane
+    │   └── k8s-worker-1 (LXC) - 192.168.1.31  ← worker
     │
-    └── D2 (Worker) - 192.168.1.12 (10.8.0.12)
-        └── k8s-worker-1 (LXC) - 192.168.1.22
+    └── D2 - 192.168.1.12 (10.8.0.12)
+        ├── k8s-master-2 (LXC) - 192.168.1.22  ← control-plane
+        └── k8s-worker-2 (LXC) - 192.168.1.32  ← worker
 ```
 
 **Topología de Red**: Ethernet dedicada + VPN WireGuard  
 **Acceso Externo**: vía DV0 (elarreglador.eu) - SSH/WireGuard  
-**Control-Plane**: D1 con contenedor k8s-master-1  
-**Worker**: D2 con contenedor k8s-worker-1  
+**Control-Plane**: D1 (k8s-master-1) + D2 (k8s-master-2) — HA multi-master con etcd replicado  
+**Workers**: D1 (k8s-worker-1) + D2 (k8s-worker-2)  
+**Almacenamiento**: GlusterFS replica 2 vía NFS-Ganesha, VIP 192.168.1.30 (Keepalived), provisionado en los workers  
 **Jumpbox**: DV0 con kubectl + lxc client para gestión remota (vía WireGuard)  
 
 ---
@@ -151,8 +154,9 @@ Máquina virtual en IONOS para acceso externo al cluster:
 - Gestión automática de pods (contenedores)
 - Balanceo de carga
 - Auto-escalado
-- Control-plane en D1
-- Worker node en D2
+- Control-plane HA: k8s-master-1 (D1) + k8s-master-2 (D2)
+- Worker nodes: k8s-worker-1 (D1) + k8s-worker-2 (D2)
+- etcd cluster replicado entre ambos control-planes (stacked)
 
 ### Conectividad
 
@@ -347,7 +351,9 @@ D2 (database-standby) ONLINE  https://192.168.1.12:8443
 
 lxc list --all-projects:
 k8s-master-1  RUNNING  192.168.1.21  D1
-k8s-worker-1  RUNNING  192.168.1.22  D2
+k8s-master-2  RUNNING  192.168.1.22  D2
+k8s-worker-1  RUNNING  192.168.1.31  D1
+k8s-worker-2  RUNNING  192.168.1.32  D2
 ```
 
 **Notas**:
@@ -423,6 +429,7 @@ DV0 tiene el snap de LXD instalado pero snapd es inestable con 394MiB RAM. Se us
 lxc cluster list    # equivalente a lxc cluster list d2:
 lxc list            # lista contenedores del cluster
 lxc info            # información del cluster vía D2
+lxc exec k8s-master-2 -- kubectl get nodes   # desde cualquier miembro del cluster
 ```
 
 **Notas**:
@@ -654,6 +661,7 @@ Ejecutar en **D1** (no dentro del contenedor):
   NAME           STATUS   ROLES    AGE   VERSION
   k8s-master-1   Ready    <none>   5h    v1.36.2
   k8s-worker-1   Ready    <none>   5h    v1.36.2
+  k8s-worker-2   Ready    <none>   5h    v1.36.2
   ```
 
 **Nota**: Con redes macvlan, el host NO puede contactar directamente al contenedor. El wrapper ejecuta kubectl dentro del contenedor vía `lxc exec`.
@@ -762,7 +770,8 @@ Longhorn y Rook/Ceph fallaron en este entorno LXC:
 Pod PVC → nfs-subdir-external-provisioner → VIP 192.168.1.30 (Keepalived)
                                                             │
                               ┌─────────────────────────────┼─────────────────────────────┐
-                              │ D1 (MASTER) 192.168.1.21    │ D2 (BACKUP) 192.168.1.22   │
+                              │ D1 (MASTER) 192.168.1.31    │ D2 (BACKUP) 192.168.1.32   │
+                              │ k8s-worker-1                │ k8s-worker-2                │
                               │ nfs-ganesha                 │ nfs-ganesha                 │
                               │   └── libgfapi ─────────────┼── libgfapi                  │
                               │ glusterd ◄─── replica 2 ───►│ glusterd                    │
@@ -771,40 +780,40 @@ Pod PVC → nfs-subdir-external-provisioner → VIP 192.168.1.30 (Keepalived)
                               └─────────────────────────────┘─────────────────────────────┘
 ```
 
+**Nota**: El almacenamiento corre exclusivamente en los workers (`k8s-worker-1` y `k8s-worker-2`). Los control-planes (`k8s-master-1` y `k8s-master-2`) no ejecutan servicios de almacenamiento para evitar contención de recursos.
+
 #### 8.1 Detener NFS kernel server y preparar bricks
 
 ```bash
-# En k8s-master-1
-systemctl stop nfs-kernel-server
-systemctl disable nfs-kernel-server
-mkdir -p /mnt/data/brick
-
-# En k8s-worker-1
+# En k8s-worker-1 (D1) y k8s-worker-2 (D2)
+systemctl stop nfs-kernel-server 2>/dev/null || true
+systemctl disable nfs-kernel-server 2>/dev/null || true
 mkdir -p /mnt/data/brick
 ```
 
-#### 8.2 Instalar dependencias en ambos contenedores
+#### 8.2 Instalar dependencias en ambos workers
 
 ```bash
-# En k8s-master-1 y k8s-worker-1
+# En k8s-worker-1 y k8s-worker-2
 apt update && apt install -y glusterfs-server nfs-ganesha nfs-ganesha-gluster keepalived
 ```
 
 #### 8.3 Crear trusted pool GlusterFS
 
 ```bash
-# En k8s-master-1
-gluster peer probe 192.168.1.22
-gluster peer status
+# En k8s-worker-1 (D1, 192.168.1.31) — probar worker-2
+gluster peer probe 192.168.1.32
+gluster pool list
+# Debe mostrar: 192.168.1.32 Connected, localhost Connected
 ```
 
 #### 8.4 Crear volumen replicado
 
 ```bash
-# En k8s-master-1
+# En k8s-worker-1
 gluster volume create vol-storage replica 2 \
-  192.168.1.21:/mnt/data/brick \
-  192.168.1.22:/mnt/data/brick force
+  192.168.1.31:/mnt/data/brick \
+  192.168.1.32:/mnt/data/brick force
 gluster volume start vol-storage
 gluster volume info vol-storage
 ```
@@ -840,7 +849,7 @@ systemctl status nfs-ganesha
 
 #### 8.6 Configurar Keepalived (VIP 192.168.1.30)
 
-**En D1 (k8s-master-1)** — `/etc/keepalived/keepalived.conf`:
+**En D1 (k8s-worker-1, 192.168.1.31)** — MASTER:
 
 ```bash
 cat > /etc/keepalived/keepalived.conf << 'EOF'
@@ -859,9 +868,10 @@ vrrp_instance VI_1 {
     }
 }
 EOF
+systemctl enable --now keepalived
 ```
 
-**En D2 (k8s-worker-1)** — mismo archivo pero `state BACKUP` y `priority 100`:
+**En D2 (k8s-worker-2, 192.168.1.32)** — BACKUP:
 
 ```bash
 cat > /etc/keepalived/keepalived.conf << 'EOF'
@@ -880,10 +890,6 @@ vrrp_instance VI_1 {
     }
 }
 EOF
-```
-
-```bash
-# En ambos nodos
 systemctl enable --now keepalived
 ```
 
@@ -979,6 +985,18 @@ kubectl exec test-pod -- sh -c 'date >> /data/timestamp.txt && cat /data/timesta
 **Prerequisitos**: Fase 7 completada, Helm instalado  
 **Duración Estimada**: 1-2 horas
 
+#### Nota sobre reconstrucción del almacenamiento (Jul 2026)
+
+Tras la redistribución de workers y renombrado de contenedores (k8s-worker-1 → k8s-worker-2 en D2, nuevo k8s-worker-1 en D1), el almacenamiento GlusterFS quedó con peers y bricks rotos. Se reconstruyó desde cero:
+
+1. **Stop/delete** volumen `vol-storage` en k8s-master-1
+2. **Detach** peers huérfanos
+3. **Reset** estado GlusterFS en ambos workers (`rm -rf /var/lib/glusterd/*` + reinicio glusterd) para regenerar UUIDs únicos
+4. **Probe** y recreate volumen con las IPs correctas (192.168.1.31 + 192.168.1.32)
+5. **Servicios de almacenamiento** (glusterd, nfs-ganesha, keepalived) deshabilitados en los control-planes (k8s-master-1, k8s-master-2) y activados en los workers
+
+**Estado actual**: VIP 192.168.1.30 en k8s-worker-1 (MASTER, D1), k8s-worker-2 como BACKUP (D2), NFS exportando correctamente, provisioner operativo.
+
 #### Incidencias durante la implementación
 
 | Problema | Causa | Solución |
@@ -986,7 +1004,9 @@ kubectl exec test-pod -- sh -c 'date >> /data/timestamp.txt && cat /data/timesta
 | `mkdir: Bad message` en `/mnt/data` | Filesystem ext4 corrupto en D2 tras escrituras previas | `mkfs.ext4 -F /dev/sda1` (no había datos importantes) |
 | NFS-Ganesha: `No export entries found` y `Incorrect or missing parameters for export` | El parámetro `volume_name` no es válido en FSAL GLUSTER; debe usarse `volume` | Cambiar `volume_name = "vol-storage"` → `volume = "vol-storage"` en `/etc/ganesha/ganesha.conf` |
 | NFS mount falla con `mount system call failed` | NFSv4 requiere Kerberos en NFS-Ganesha sin configuración adicional | Forzar NFSv3 con `mountOptions: {nfsvers=3}` en el Helm chart del provisioner |
-| D2 sin acceso a kubectl tras failover | API Server solo corre en D1; D2 no tiene kubeconfig configurado | Esperado — el cluster tiene un solo control-plane. Los pods existentes en D2 continúan funcionando y accediendo al NFS sin interrupción |
+| D2 sin acceso a kubectl tras failover | API Server solo corre en D1; D2 no tiene kubeconfig configurado | Con HA multi-master (k8s-master-2 en D2) el API Server sigue disponible aunque falle D1. Los pods existentes continúan funcionando y accediendo al NFS sin interrupción. |
+| Mismo UUID GlusterFS en ambos workers tras clone | k8s-worker-1 fue clonado de k8s-worker-2, heredando `/var/lib/glusterd/*` | `rm -rf /var/lib/glusterd/*` y reiniciar glusterd en cada worker para regenerar UUID único |
+| GlusterFS peers apuntan a IP incorrecta tras reubicar contenedores | k8s-worker-1 renombrado y movido a D1 (192.168.1.31) pero peer/brick seguía referenciando 192.168.1.22 | Reconstruir GlusterFS desde cero: stop/delete volume, detach peers, reset workers, recreate con IPs correctas |
 
 ---
 
@@ -1259,15 +1279,15 @@ Sin métricas ni logs, operar un cluster es como volar a ciegas. Prometheus reco
 
 **Objetivo**: Mejorar tolerancia a fallos
 
-Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker pero no la del maestro. Esta fase prepara el camino hacia un cluster de producción: etcd replicado, Pod Disruption Budgets y un plan de disaster recovery para cuando llegue D3.
+Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker pero no la del maestro. Esta fase implementa control-plane HA con etcd replicado entre ambos nodos físicos.
 
-**Nota**: Requiere ampliación RAM a 16GB y/o adición de D3
-
-- [ ] Considerar agregar tercer nodo (D3) para HA
-- [ ] Replicar etcd (3 nodos mínimo)
-
+- [x] Agregar segundo control-plane (k8s-master-2 en D2)
+- [x] etcd replicado (stacked, 2 miembros)
+- [ ] Agregar tercer nodo (D3) para quorum etcd (3 nodos mínimo)
 - [ ] Implementar Pod Disruption Budgets
 - [ ] Crear estrategia de disaster recovery
+
+**Nota técnica**: etcd con 2 miembros es funcional pero no tolera fallos de un control-plane (pierde quorum). Para HA real se necesita un tercer miembro (D3 o miembro externo).
 
 **Prerequisitos**: Fase 12 completada, hardware mejorado  
 **Duración Estimada**: Variable
@@ -1350,10 +1370,25 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
 - [x] Fase 8: Almacenamiento Persistente (GlusterFS + NFS-Ganesha)
 - [x] Fase 9: Despliegues de Prueba
 - [x] **Fase 2.4**: DV0 como cliente remoto LXC con remote `d2` por defecto
+- [x] **HA Multi-Master (Fase 13 extendida)**:
+  - Segundo control-plane k8s-master-2 en D2 (192.168.1.22)
+  - etcd cluster de 2 miembros (stacked, replicado)
+  - Worker k8s-worker-1 renombrado y movido a D1 (192.168.1.31)
+  - Nuevo worker k8s-worker-2 en D2 (192.168.1.32, antes k8s-worker-1)
+  - 4 nodos en total: 2 control-planes + 2 workers
+  - Resolución de bug dqlite en LXD 5.21 → upgrade a LXD 6.9
+  - Recuperación de etcd cluster (force-new-cluster + member remove) tras join fallido
+
+- [x] **Reubicación del almacenamiento a workers**:
+  - GlusterFS, NFS-Ganesha y Keepalived movidos de k8s-master-1 a k8s-worker-1 (D1, 192.168.1.31)
+  - k8s-worker-2 (D2, 192.168.1.32) como peer GlusterFS BACKUP
+  - UUIDs GlusterFS regenerados (conflicto por clone resuelto)
+  - Volumen replica 2 recreado con bricks en `/mnt/data/brick` de cada worker
+  - VIP 192.168.1.30 ahora en k8s-worker-1 (MASTER), failover a k8s-worker-2
+  - NFS-Ganesha exportando correctamente en ambos workers
+  - Test de migración exitoso: datos escritos en un worker persisten al migrar el pod al otro
 
 ### Pendiente ⏳
-
-### Limitaciones Conocidas ⚠️
 
 - **RAM**: 8GB por nodo (mínimo alcanzado, ideal 16GB)
   - D1: 8GB (Samsung + SK Hynix, Dual Channel)
@@ -1366,9 +1401,13 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
 - **Alimentación**: Ambos nodos disponen de SAI
   - Apagar graceful del nodo worker ante corte eléctrico prolongado
 
+- **Almacenamiento en workers**: GlusterFS + NFS-Ganesha + Keepalived se ejecutan en los workers (k8s-worker-1, k8s-worker-2). Si un worker cae, el otro sigue sirviendo el NFS (gracias a GlusterFS replica 2 + VIP). Sin embargo, los datos solo son accesibles por pods corriendo en workers; los control-planes no montan el NFS directamente.
+
 - **Kubernetes en LXC**: Se requieren configuraciones especiales
 
 - **GlusterFS con 2 nodos y replica 2**: El volumen replica 2 sobrevive la caída de un nodo (el otro sigue sirviendo). Sin embargo, ningún nodo puede caer permanentemente sin dejar el volumen degradado. Al añadir D3 se migrará a disperse (erasure code) para ~1TB usable con tolerancia a 1 fallo.
+
+- **etcd con 2 miembros**: El cluster etcd tolera la caída de un control-plane pero pierde quorum (necesita mayoría = 2 de 2). Con 3 miembros toleraría 1 fallo. Alternativa: añadir un miembro etcd externo o un tercer nodo D3.
 
 ---
 
@@ -1379,8 +1418,10 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
 ```bash
 # Habilitar nesting y modo privilegiado
 lxc config set k8s-master-1 security.nesting=true security.privileged=true
+lxc config set k8s-master-2 security.nesting=true security.privileged=true
 lxc config set k8s-worker-1 security.nesting=true security.privileged=true
-lxc restart k8s-master-1 k8s-worker-1
+lxc config set k8s-worker-2 security.nesting=true security.privileged=true
+lxc restart k8s-master-1 k8s-master-2 k8s-worker-1 k8s-worker-2
 ```
 
 ### Después de reiniciar el contenedor
