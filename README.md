@@ -359,6 +359,92 @@ k8s-worker-1  RUNNING  192.168.1.22  D2
 
 ---
 
+### Fase 2.4 | DV0 como miembro del cluster LXD
+
+**Objetivo**: Añadir DV0 como nodo de base de datos del cluster LXD para mejorar el quorum.
+
+Actualmente el cluster LXD tiene 2 nodos (D1, D2). Con solo 2 miembros, la pérdida de un nodo compromete el quorum. DV0 (VM IONOS, 512MiB RAM + 2GB swap) puede unirse sin alojar contenedores — solo actúa como nodo de base de datos para el consenso dqlite/raft.
+
+**Topología de red tras la unión**:
+```
+DV0 (10.8.0.1:8443) ─── WG ─── D1 (192.168.1.11:8443)
+                    ─── WG ─── D2 (192.168.1.12:8443)
+```
+
+DV0 no puede alcanzar las IPs LAN (192.168.1.x) directamente. Para que DV0 se comunique con D1/D2, el tráfico LAN viaja a través del túnel WireGuard:
+
+1. **En DV0**: Añadir las IPs LAN a los `AllowedIPs` de cada peer en `/etc/wireguard/wg0.conf`:
+   ```ini
+   # Peer D1
+   AllowedIPs = 10.8.0.11/32, 192.168.1.11/32
+
+   # Peer D2
+   AllowedIPs = 10.8.0.12/32, 192.168.1.12/32
+   ```
+
+2. **En DV0**: Añadir ruta estática para la LAN a través de wg0:
+   ```bash
+   ip route add 192.168.1.0/24 dev wg0
+   ```
+
+3. **En DV0**: Aplicar cambios en caliente:
+   ```bash
+   wg set wg0 peer <PUBKEY_D1> allowed-ips 10.8.0.11/32,192.168.1.11/32
+   wg set wg0 peer <PUBKEY_D2> allowed-ips 10.8.0.12/32,192.168.1.12/32
+   ```
+
+**Procedimiento de unión**:
+
+1. **En DV0**: Configurar LXD para escuchar en la IP WireGuard:
+   ```bash
+   lxc config set core.https_address 10.8.0.1:8443
+   lxc config set cluster.https_address 10.8.0.1:8443
+   ```
+
+2. **En DV0**: Crear storage pool tipo `dir` (no alojará instancias, solo necesario para que LXD funcione):
+   ```bash
+   lxc storage create default dir
+   ```
+
+3. **En D1 o D2**: Generar token de unión:
+   ```bash
+   lxc cluster add dv0
+   ```
+
+4. **En DV0**: Unirse al cluster:
+   ```bash
+   sg lxd -c 'lxc cluster join <TOKEN>'
+   ```
+
+5. **Verificar** desde cualquier miembro:
+   ```bash
+   lxc cluster list
+   ```
+
+**Resultado esperado**:
+```
++------+---------------------------+------------------+--------------+----------------+-------------+--------+-------------------+
+| NAME |            URL            |      ROLES       | ARCHITECTURE | FAILURE DOMAIN | DESCRIPTION | STATE  |      MESSAGE      |
++------+---------------------------+------------------+--------------+----------------+-------------+--------+-------------------+
+| D1   | https://192.168.1.11:8443 | database-leader  | x86_64       | default        |             | ONLINE | Fully operational |
+| D2   | https://192.168.1.12:8443 | database-standby | x86_64       | default        |             | ONLINE | Fully operational |
+| dv0  | https://10.8.0.1:8443     | database         | x86_64       | default        |             | ONLINE | Fully operational |
++------+---------------------------+------------------+--------------+----------------+-------------+--------+-------------------+
+```
+
+**Notas**:
+- DV0 no alojará contenedores ni VMs — solo participa en el consenso dqlite.
+- El tráfico dqlite entre D1 y D2 sigue siendo LAN directa (sin latencia extra).
+- Si DV0 se cae (VM IONOS), el cluster sigue funcionando con D1 y D2.
+- Consumo adicional estimado en DV0: ~150-250MB RAM para LXD + dqlite.
+
+**Prerequisitos**: Fase 2.3 completada, WireGuard operativo  
+**Duración Estimada**: 15-20 minutos
+
+**Nota de verificación**: La ruta LAN vía WireGuard se ha probado exitosamente — DV0 alcanza `192.168.1.11:8443` y `192.168.1.12:8443` a través del túnel con ~15ms de latencia.
+
+---
+
 ### Fase 3️ | Runtime de Contenedores
 
 **Objetivo**: Instalar y configurar containerd
@@ -1258,20 +1344,24 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
 - [x] Nodo de Gestión DV0
   - VM IONOS (Ubuntu 26.04) con dominio elarreglador.eu
   - WireGuard VPN server reinstaurado (10.8.0.1/24, puerto 51820)
-  - kubectl v1.32 instalado y configurado (kubeconfig vía LXC proxy)
-  - LXD client instalado y configurado (remote a D2 vía WireGuard)
+  - WireGuard estabilizado con `PersistentKeepalive=25` en D1/D2 (evita caída del túnel por NAT timeout)
+  - kubectl v1.32 instalado y configurado (kubeconfig vía LXC proxy device 10.8.0.11:6443)
+  - LXD client instalado y configurado (remote `d2` apuntando a `https://10.8.0.12:8443`)
   - Clave SSH generada para acceso a D1/D2
   - Plantillas WireGuard para D1/D2 en files/ (claves reales en backup local)
-  - LXC proxy device en D1: 10.8.0.11:6443 → k8s-master-1:6443
+  - LXC proxy device en D1: `10.8.0.11:6443 → k8s-master-1:6443`
+  - API LXD de D2 cambiada a `[::]:8443` para acceso desde DV0 vía WireGuard
+  - Repositorio sanitizado: `filter-branch` para eliminar claves reales del historial git
+  - Documentación de gestión remota en [01-Network.md#gestión-remota-desde-dv0](./01-Network.md#gestión-remota-desde-dv0)
+  - Documentación de estabilidad WireGuard en [01-Network.md#wireguard-estabilidad-de-conexión](./01-Network.md#wireguard-estabilidad-de-conexión)
+
 ### En Progreso 🔄
 
 - [x] Fase 8: Almacenamiento Persistente (GlusterFS + NFS-Ganesha)
 - [x] Fase 9: Despliegues de Prueba
-- [x] D1/D2: WireGuard actualizado y conectado a DV0 + clave SSH autorizada
+- [ ] **Fase 2.4**: Añadir DV0 como miembro del cluster LXD (planificado, ver README)
 
 ### Pendiente ⏳
-
-- [ ] Fases 4-13: Instalación de Kubernetes y componentes avanzados (las fases 4-9 ya están completadas en las ramas remotas)
 
 ### Limitaciones Conocidas ⚠️
 

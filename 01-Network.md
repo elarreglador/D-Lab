@@ -151,10 +151,12 @@ PostUp = iptables -I INPUT -p udp --dport 51820 -j ACCEPT
 PostUp = iptables -I FORWARD -i ens6 -o wg0 -j ACCEPT
 PostUp = iptables -I FORWARD -i wg0 -j ACCEPT
 PostUp = iptables -t nat -A POSTROUTING -o ens6 -j MASQUERADE
+PostUp = ip route add 192.168.1.0/24 dev wg0
 PostDown = iptables -D INPUT -p udp --dport 51820 -j ACCEPT
 PostDown = iptables -D FORWARD -i ens6 -o wg0 -j ACCEPT
 PostDown = iptables -D FORWARD -i wg0 -j ACCEPT
 PostDown = iptables -t nat -D POSTROUTING -o ens6 -j MASQUERADE
+PostDown = ip route del 192.168.1.0/24 dev wg0
 ```
 
 ### Clientes WireGuard
@@ -365,4 +367,74 @@ lxc remote add d2 10.8.0.12:8443 --password <CLAVE_SUDO> --accept-certificate
 lxc list d2:
 lxc exec d2:k8s-worker-1 -- kubectl get nodes
 ```
+
+> **Nota**: Como el grupo `lxd` requiere re-login tras `usermod -aG lxd`, usa `sg lxd -c "comando"` en lugar de `lxc` directamente si no has cerrado sesión:
+> ```bash
+> sg lxd -c "lxc cluster list d2:"
+> ```
+
+### Ruta a LAN por WireGuard desde DV0
+
+Para que DV0 pueda alcanzar D1/D2 en sus IPs LAN (`192.168.1.x`) a través del túnel WireGuard —necesario si DV0 se une al cluster LXD— se añaden las IPs LAN a los `AllowedIPs` de cada peer en el servidor:
+
+```ini
+### Client D1
+[Peer]
+PublicKey = <PUBKEY_D1>
+AllowedIPs = 10.8.0.11/32, 192.168.1.11/32, fd42:42:42::11/128
+
+### Client D2
+[Peer]
+PublicKey = <PUBKEY_D2>
+AllowedIPs = 10.8.0.12/32, 192.168.1.12/32, fd42:42:42::12/128
+```
+
+Además, se añade una ruta estática en DV0:
+
+```bash
+ip route add 192.168.1.0/24 dev wg0
+```
+
+Aplicar en caliente:
+
+```bash
+wg set wg0 peer <PUBKEY_D1> allowed-ips 10.8.0.11/32,192.168.1.11/32,fd42:42:42::11/128
+wg set wg0 peer <PUBKEY_D2> allowed-ips 10.8.0.12/32,192.168.1.12/32,fd42:42:42::12/128
+ip route add 192.168.1.0/24 dev wg0
+```
+
+---
+
+## WireGuard: Estabilidad de Conexión
+
+### Problema: Conectividad Intermitente
+
+Se observó que desde DV0 a veces no se podía alcanzar D1/D2 via WireGuard (ping, kubectl, SSH), aunque los handshakes estaban activos. El tráfico desde los clientes a DVO siempre funcionaba.
+
+### Causa Raíz
+
+Los clientes (`D1`, `D2`) están detrás de un router NAT doméstico. Sin tráfico activo, el mapeo NAT UDP expira (en ~30s por defecto), y al iniciar tráfico desde DV0, WireGuard debía re-hacer el handshake.
+
+### Solución: PersistentKeepalive
+
+Se añadió `PersistentKeepalive = 25` en la sección `[Peer]` de ambas configuraciones cliente:
+
+```ini
+[Peer]
+PublicKey = <SERVER_PUBLIC_KEY>
+PresharedKey = <PRESHARED_KEY>
+Endpoint = 82.223.50.169:51820
+AllowedIPs = 0.0.0.0/0,::/0
+PersistentKeepalive = 25   # <-- añadido
+```
+
+Esto envía un keepalive cada 25 segundos, manteniendo el mapeo NAT activo.
+
+### Aplicación en caliente (sin cortar conexión)
+
+```bash
+wg set wg0 peer <PUBLIC_KEY_DEL_SERVIDOR> persistent-keepalive 25
+```
+
+Editar también `/etc/wireguard/wg0.conf` para que persista tras reinicio.
 
