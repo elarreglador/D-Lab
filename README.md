@@ -359,89 +359,79 @@ k8s-worker-1  RUNNING  192.168.1.22  D2
 
 ---
 
-### Fase 2.4 | DV0 como miembro del cluster LXD
+### Fase 2.4 | DV0 como cliente remoto del cluster LXD
 
-**Objetivo**: Añadir DV0 como nodo de base de datos del cluster LXD para mejorar el quorum.
+**Objetivo**: Gestionar el cluster LXD desde DV0 con comandos `lxc` sin el prefijo `d2:`, usando un remote por defecto.
 
-Actualmente el cluster LXD tiene 2 nodos (D1, D2). Con solo 2 miembros, la pérdida de un nodo compromete el quorum. DV0 (VM IONOS, 512MiB RAM + 2GB swap) puede unirse sin alojar contenedores — solo actúa como nodo de base de datos para el consenso dqlite/raft.
+Inicialmente se intentó unir DV0 como miembro del cluster, pero DV0 tiene solo 394MiB de RAM — insuficiente para ejecutar el daemon LXD (el binario snap se bloquea en lectura squashfs por falta de memoria). Como alternativa, DV0 actúa como **cliente remoto** con `d2` como remote por defecto, ofreciendo la misma experiencia de usuario sin ejecutar el daemon local.
 
-**Topología de red tras la unión**:
-```
-DV0 (10.8.0.1:8443) ─── WG ─── D1 (192.168.1.11:8443)
-                    ─── WG ─── D2 (192.168.1.12:8443)
-```
+**Solución**: Wrapper que usa el binario real de LXD directamente (sin pasar por snapd) con `d2` configurado como remote por defecto.
+
+#### Configuración de Red (LAN vía WireGuard)
 
 DV0 no puede alcanzar las IPs LAN (192.168.1.x) directamente. Para que DV0 se comunique con D1/D2, el tráfico LAN viaja a través del túnel WireGuard:
 
-1. **En DV0**: Añadir las IPs LAN a los `AllowedIPs` de cada peer en `/etc/wireguard/wg0.conf`:
+1. En DV0, añadir las IPs LAN a los `AllowedIPs` de cada peer en `/etc/wireguard/wg0.conf`:
    ```ini
    # Peer D1
-   AllowedIPs = 10.8.0.11/32, 192.168.1.11/32
+   AllowedIPs = 10.8.0.11/32, 192.168.1.11/32, fd42:42:42::11/128
 
    # Peer D2
-   AllowedIPs = 10.8.0.12/32, 192.168.1.12/32
+   AllowedIPs = 10.8.0.12/32, 192.168.1.12/32, fd42:42:42::12/128
    ```
 
-2. **En DV0**: Añadir ruta estática para la LAN a través de wg0:
+2. Añadir ruta estática en `PostUp` de wg0.conf:
    ```bash
    ip route add 192.168.1.0/24 dev wg0
    ```
 
-3. **En DV0**: Aplicar cambios en caliente:
+#### Configuración del Cliente LXC
+
+DV0 tiene el snap de LXD instalado pero snapd es inestable con 394MiB RAM. Se usa el binario real directamente:
+
+1. **Copiar la configuración del cliente** desde el directorio snap a `~/.config/lxc/`:
    ```bash
-   wg set wg0 peer <PUBKEY_D1> allowed-ips 10.8.0.11/32,192.168.1.11/32
-   wg set wg0 peer <PUBKEY_D2> allowed-ips 10.8.0.12/32,192.168.1.12/32
+   mkdir -p ~/.config/lxc
+   cp ~/snap/lxd/common/config/config.yml ~/.config/lxc/
+   cp ~/snap/lxd/common/config/client.crt ~/.config/lxc/
+   cp ~/snap/lxd/common/config/client.key ~/.config/lxc/
+   cp -r ~/snap/lxd/common/config/servercerts ~/.config/lxc/
    ```
 
-**Procedimiento de unión**:
-
-1. **En DV0**: Configurar LXD para escuchar en la IP WireGuard:
-   ```bash
-   lxc config set core.https_address 10.8.0.1:8443
-   lxc config set cluster.https_address 10.8.0.1:8443
+2. **Configurar `d2` como remote por defecto** en `~/.config/lxc/config.yml`:
+   ```yaml
+   default-remote: d2
    ```
 
-2. **En DV0**: Crear storage pool tipo `dir` (no alojará instancias, solo necesario para que LXD funcione):
+3. **Crear wrapper script** en `~/.local/bin/lxc`:
    ```bash
-   lxc storage create default dir
+   mkdir -p ~/.local/bin
+   cat > ~/.local/bin/lxc << 'EOF'
+   #!/bin/bash
+   exec /snap/lxd/40074/bin/lxc "$@"
+   EOF
+   chmod +x ~/.local/bin/lxc
    ```
 
-3. **En D1 o D2**: Generar token de unión:
+4. **Añadir `~/.local/bin` al PATH** en `~/.bashrc`:
    ```bash
-   lxc cluster add dv0
+   echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
    ```
 
-4. **En DV0**: Unirse al cluster:
-   ```bash
-   sg lxd -c 'lxc cluster join <TOKEN>'
-   ```
-
-5. **Verificar** desde cualquier miembro:
-   ```bash
-   lxc cluster list
-   ```
-
-**Resultado esperado**:
-```
-+------+---------------------------+------------------+--------------+----------------+-------------+--------+-------------------+
-| NAME |            URL            |      ROLES       | ARCHITECTURE | FAILURE DOMAIN | DESCRIPTION | STATE  |      MESSAGE      |
-+------+---------------------------+------------------+--------------+----------------+-------------+--------+-------------------+
-| D1   | https://192.168.1.11:8443 | database-leader  | x86_64       | default        |             | ONLINE | Fully operational |
-| D2   | https://192.168.1.12:8443 | database-standby | x86_64       | default        |             | ONLINE | Fully operational |
-| dv0  | https://10.8.0.1:8443     | database         | x86_64       | default        |             | ONLINE | Fully operational |
-+------+---------------------------+------------------+--------------+----------------+-------------+--------+-------------------+
+**Uso**:
+```bash
+lxc cluster list    # equivalente a lxc cluster list d2:
+lxc list            # lista contenedores del cluster
+lxc info            # información del cluster vía D2
 ```
 
 **Notas**:
-- DV0 no alojará contenedores ni VMs — solo participa en el consenso dqlite.
-- El tráfico dqlite entre D1 y D2 sigue siendo LAN directa (sin latencia extra).
-- Si DV0 se cae (VM IONOS), el cluster sigue funcionando con D1 y D2.
-- Consumo adicional estimado en DV0: ~150-250MB RAM para LXD + dqlite.
+- El daemon LXD local de DV0 permanece detenido (snap disabled).
+- Todos los comandos `lxc` se ejecutan contra el remote `d2` vía HTTPS sobre WireGuard.
+- La ruta LAN vía WireGuard se ha probado exitosamente — DV0 alcanza `192.168.1.11:8443` y `192.168.1.12:8443` con ~15ms de latencia.
 
 **Prerequisitos**: Fase 2.3 completada, WireGuard operativo  
-**Duración Estimada**: 15-20 minutos
-
-**Nota de verificación**: La ruta LAN vía WireGuard se ha probado exitosamente — DV0 alcanza `192.168.1.11:8443` y `192.168.1.12:8443` a través del túnel con ~15ms de latencia.
+**Duración Estimada**: 10 minutos
 
 ---
 
@@ -1359,7 +1349,7 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
 
 - [x] Fase 8: Almacenamiento Persistente (GlusterFS + NFS-Ganesha)
 - [x] Fase 9: Despliegues de Prueba
-- [ ] **Fase 2.4**: Añadir DV0 como miembro del cluster LXD (planificado, ver README)
+- [x] **Fase 2.4**: DV0 como cliente remoto LXC con remote `d2` por defecto
 
 ### Pendiente ⏳
 

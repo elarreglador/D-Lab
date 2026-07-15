@@ -334,48 +334,79 @@ kubectl get pods -A
 
 ## LXC (lxd client) en DV0
 
-DV0 tiene instalado el cliente LXD via snap, que permite gestionar el cluster LXD de D1/D2 de forma remota.
+DV0 gestiona el cluster LXD de forma remota usando el binario real de LXC directamente (bypasseando snapd, que es inestable con 394MiB RAM).
 
-### Grupo LXD
+### Problema: snapd inestable
 
-El usuario `elarreglador` debe pertenecer al grupo `lxd`:
+DV0 tiene solo 394MiB de RAM. El snap de LXD se bloquea al leer binarios desde squashfs (`submit_bio_wait` / `squashfs_bio_read`). El wrapper `/usr/sbin/lxc` (del paquete `lxd-installer`) cuelga al ejecutar `snap list lxd`.
+
+### Solución: binario real + remote por defecto
+
+1. **Copiar la configuración** desde el directorio snap a `~/.config/lxc/`:
+   ```bash
+   mkdir -p ~/.config/lxc
+   cp ~/snap/lxd/common/config/config.yml ~/.config/lxc/
+   cp ~/snap/lxd/common/config/client.crt ~/.config/lxc/
+   cp ~/snap/lxd/common/config/client.key ~/.config/lxc/
+   cp -r ~/snap/lxd/common/config/servercerts ~/.config/lxc/
+   ```
+
+2. **Configurar `d2` como remote por defecto** en `~/.config/lxc/config.yml`:
+   ```yaml
+   default-remote: d2
+   remotes:
+     d2:
+       addr: https://10.8.0.12:8443
+       auth_type: tls
+       project: default
+       protocol: lxd
+       public: false
+     local:
+       addr: unix://
+       public: false
+   ```
+
+3. **Crear wrapper** en `~/.local/bin/lxc` que llame al binario real:
+   ```bash
+   mkdir -p ~/.local/bin
+   cat > ~/.local/bin/lxc << 'EOF'
+   #!/bin/bash
+   exec /snap/lxd/40074/bin/lxc "$@"
+   EOF
+   chmod +x ~/.local/bin/lxc
+   ```
+
+4. **Añadir `~/.local/bin` al PATH** en `~/.bashrc`:
+   ```bash
+   echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
+   ```
+
+### Verificación
 
 ```bash
-sudo usermod -aG lxd elarreglador
-# Cerrar sesión y volver a entrar, o usar:
-sg lxd -c "lxc version"
+lxc cluster list    # lista los miembros del cluster
+lxc list            # lista contenedores del cluster
+lxc info            # información del cluster vía D2
 ```
 
-### Añadir Remote LXD
+### Configuración previa: Remote LXD en D2
 
-La API de LXD en D2 solo escuchaba en la IP LAN (`192.168.1.12:8443`). Se cambió para escuchar en todas las interfaces:
+Para que DV0 pueda conectar, la API de LXD en D2 debe escuchar en todas las interfaces:
 
 ```bash
-# En D2
+# En D2 (ejecutado una vez)
 lxc config set core.https_address [::]:8443
 ```
 
-Desde DV0 se añade D2 como remote:
+El remote `d2` se añadió originalmente con:
 
 ```bash
 lxc remote add d2 10.8.0.12:8443 --password <CLAVE_SUDO> --accept-certificate
 ```
 
-### Verificación
-
-```bash
-lxc list d2:
-lxc exec d2:k8s-worker-1 -- kubectl get nodes
-```
-
-> **Nota**: Como el grupo `lxd` requiere re-login tras `usermod -aG lxd`, usa `sg lxd -c "comando"` en lugar de `lxc` directamente si no has cerrado sesión:
-> ```bash
-> sg lxd -c "lxc cluster list d2:"
-> ```
-
 ### Ruta a LAN por WireGuard desde DV0
 
-Para que DV0 pueda alcanzar D1/D2 en sus IPs LAN (`192.168.1.x`) a través del túnel WireGuard —necesario si DV0 se une al cluster LXD— se añaden las IPs LAN a los `AllowedIPs` de cada peer en el servidor:
+Para que DV0 pueda alcanzar D1/D2 en sus IPs LAN (`192.168.1.x`) a través del túnel WireGuard —necesario para la comunicación con el cluster LXD y Kubernetes— se añaden las IPs LAN a los `AllowedIPs` de cada peer en el servidor:
 
 ```ini
 ### Client D1
