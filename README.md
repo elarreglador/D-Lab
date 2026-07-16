@@ -1223,16 +1223,27 @@ kubectl delete pod cross-node-pod
 
 Un cluster expuesto sin controles de acceso es vulnerable. RBAC restringe qué puede hacer cada usuario o servicio, NetworkPolicies aíslan tráfico entre pods y la auditoría registra toda actividad en el API Server para forense.
 
-- [ ] Configurar RBAC
-  - Crear roles personalizados
-  - Crear RoleBindings
+- [x] Configurar RBAC
+  - Crear ClusterRoles: `developer`, `readonly`, `namespace-admin`
+  - Crear ClusterRoleBindings: `readonly-binding` (grupo `system:readonly`), `developer-binding` (grupo `system:developers`)
 - [ ] Implementar NetworkPolicies
-- [ ] Configurar Pod Security Standards
-- [ ] Habilitar auditoría en API Server
-- [ ] Configurar backups de etcd
-  ```bash
-  ETCDCTL_API=3 etcdctl snapshot save backup.db
-  ```
+  - **¿Qué son?**: Aíslan tráfico entre pods. Por defecto todo pod puede hablar con cualquier otro pod. Con NetworkPolicies defines reglas como "el pod A solo acepta tráfico del pod B en el puerto 8080".
+  - **Problema**: Flannel (nuestro CNI) **no soporta** NetworkPolicies. Solo gestiona la red overlay (IPs y rutas), no tiene motor de políticas para filtrar tráfico.
+  - **Soluciones**:
+    1. **Calico policy-only**: se instala junto a Flannel, añade el motor de políticas sin reemplazar la red. Requiere ajustar Flannel para evitar conflictos de iptables.
+    2. **Cilium**: reemplazaría Flannel completamente (red + políticas integradas). Más moderno (eBPF) pero requiere migrar el CNI con downtime.
+  - **Estado**: Pendiente de evaluar impacto e implementar una de las dos opciones.
+- [x] Configurar Pod Security Standards (PSS)
+  - `kube-system`, `kube-flannel`: privileged
+  - `default`, `nfs-storage`: baseline con warn restricted
+- [x] Habilitar auditoría en API Server
+  - Audit policy en `/etc/kubernetes/audit/policy.yaml` (Metadata level, excluye healthz)
+  - Logs en `/var/log/kubernetes/audit/audit.log` (max 7 días, 100MB, 10 backups)
+  - Aplicado en ambos control-planes (k8s-master-1, k8s-master-2)
+- [x] Configurar backups de etcd
+  - Script: `/usr/local/bin/backup-etcd.sh` (snapshot diaria via etcdctl)
+  - Destino: `/backup/etcd/` (rotación: últimas 30 copias)
+  - Cron: `/etc/cron.d/etcd-backup` (diario a las 2:00 AM)
 
 **Prerequisitos**: Fase 9 completada  
 **Duración Estimada**: 2 horas
@@ -1280,6 +1291,20 @@ Sin métricas ni logs, operar un cluster es como volar a ciegas. Prometheus reco
 **Objetivo**: Mejorar tolerancia a fallos
 
 Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker pero no la del maestro. Esta fase implementa control-plane HA con etcd replicado entre ambos nodos físicos.
+
+### ¿Qué es etcd?
+
+etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** distribuido que usa el **protocolo Raft** para mantener el consenso entre nodos.
+
+**¿Qué guarda etcd?**
+- Todo el estado del cluster: pods, Services, Deployments, ConfigMaps, Secrets, nodos...
+- Cada `kubectl apply` o cambio en el cluster se traduce en una escritura en etcd.
+
+**¿Por qué es crítico?**
+- Si etcd se corrompe o pierde datos, **el cluster entero muere** — no hay API Server, los pods siguen corriendo pero no se pueden gestionar.
+- Por eso se hacen backups diarios (Fase 10).
+
+**En nuestro cluster**: Modo **stacked** — cada control-plane ejecuta su propio etcd (1 miembro por master). Con 2 miembros, si uno falla el cluster etcd pierde quorum (necesita mayoría = 2 de 2). Para HA real se necesita un tercer miembro.
 
 - [x] Agregar segundo control-plane (k8s-master-2 en D2)
 - [x] etcd replicado (stacked, 2 miembros)
@@ -1387,6 +1412,12 @@ Con un solo control-plane y 2 workers, el cluster tolera la caída de un worker 
   - VIP 192.168.1.30 ahora en k8s-worker-1 (MASTER), failover a k8s-worker-2
   - NFS-Ganesha exportando correctamente en ambos workers
   - Test de migración exitoso: datos escritos en un worker persisten al migrar el pod al otro
+
+- [x] **Fase 10: Seguridad Avanzada**:
+  - RBAC: ClusterRoles `developer`, `readonly`, `namespace-admin` + bindings
+  - Pod Security Standards: namespaces etiquetados (privileged/baseline)
+  - Auditoría API Server: policy + logs en ambos masters
+  - Backups etcd: script diario + rotación a `/backup/etcd/`
 
 ### Pendiente ⏳
 
