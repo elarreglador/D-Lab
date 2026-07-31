@@ -12,6 +12,7 @@ Proyecto de virtualización y orquestación de contenedores usando LXC (Linux Co
 - [Documentación Técnica](#documentación-técnica)
 - [Guía de Instalación](#guía-de-instalación)
 - [Fase 10.1: Exposición Pública de Servicios](#fase-101--exposición-pública-de-servicios)
+- [Fase 11: Nginx Ingress Controller](#fase-11--nginx-ingress-controller)
 - [Estado del Proyecto](#estado-del-proyecto)
 
 ---
@@ -187,6 +188,7 @@ Máquina virtual en IONOS para acceso externo al cluster:
 | [files/dv0-ssh-pubkey.txt](./files/dv0-ssh-pubkey.txt) | Instrucciones para obtener clave pública de DV0 |
 | [01-Network.md#gestión-remota-desde-dv0](./01-Network.md#gestión-remota-desde-dv0) | Configuración de kubectl y lxc remote en DV0 |
 | [README.md#fase-101--exposición-pública-de-servicios](./README.md#fase-101--exposición-pública-de-servicios) | Fase 10.1: Exposición pública de servicios K8s vía nginx DV0 + Let's Encrypt |
+| [README.md#fase-11--nginx-ingress-controller](./README.md#fase-11--nginx-ingress-controller) | Fase 11: Ingress Controller passthrough total (nginx DV0 stream → ingress-nginx) + cert-manager |
 
 ---
 
@@ -1333,8 +1335,8 @@ curl https://elarreglador.eu       # → 200
 ```
 
 **Notas**:
-- **DNS**: solo existen registros A para `elarreglador.eu` y `www.elarreglador.eu` → `82.223.50.169`. No hay registro wildcard ni `test.*` (NXDOMAIN). El certificado Let's Encrypt **no cubre** subdominios adicionales: para exponer más hostnames hará falta crear registros DNS (o wildcard) en Spaceship y ampliar el certificado (Fase 11).
-- **TLS y balanceo**: actualmente TLS lo termina nginx de DV0 y todo apunta a un único NodePort. La migración a un Ingress Controller dentro del cluster (Fase 11) permitirá enrutar múltiples servicios por hostname desde un único punto.
+- **DNS**: tras la Fase 11 existe un registro wildcard `*.elarreglador.eu` → `82.223.50.169` (TTL 300, añadido en Spaceship). Esta fase cubría únicamente `elarreglador.eu` y `www.elarreglador.eu`.
+- **TLS y balanceo**: esta fase terminaba TLS en nginx de DV0 y apuntaba a un único NodePort. En la Fase 11 se migró a passthrough total con Ingress Controller dentro del cluster (ver [Fase 11](#fase-11--nginx-ingress-controller)); el certificado aquí descrito fue retirado de DV0 el 2026-07-31.
 - Los handshakes WireGuard se mantienen frescos con `PersistentKeepalive=25` (ver [01-Network.md](./01-Network.md#wireguard-estabilidad-de-conexión)).
 
 **Prerequisitos**: Fase 10 completada, WireGuard operativo  
@@ -1344,20 +1346,104 @@ curl https://elarreglador.eu       # → 200
 
 ### Fase 11️ | Nginx Ingress Controller
 
-**Objetivo**: Configurar enrutamiento avanzado de tráfico
+**Objetivo**: Migrar la exposición pública a passthrough total con Ingress Controller y certificado TLS gestionado dentro del cluster (cert-manager).
 
 Los Services tipo ClusterIP o NodePort tienen limitaciones para enrutar tráfico HTTP/HTTPS. Un Ingress Controller actúa como proxy inverso dentro del cluster, permitiendo enrutar por dominio, TLS y balanceo de carga a múltiples servicios.
 
-- [ ] Instalar Nginx Ingress Controller
-  ```bash
-  kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
-  ```
-- [ ] Crear Ingress resources
-- [ ] Configurar certificados TLS (opcional: cert-manager)
-- [ ] Validar enrutamiento de múltiples servicios
+**Arquitectura** (passthrough total — DV0 solo reenvía bytes, sin TLS):
+```
+Internet → *.elarreglador.eu (DNS wildcard A → 82.223.50.169)
+              ↓
+DV0 nginx (módulo stream, TCP 80/443 → 10.8.0.11:30080/30443)
+              ↓ túnel WireGuard
+LXD proxy devices `proxy30080`/`proxy30443` (listen tcp:10.8.0.11:30080/30443)
+              ↓ connect
+tcp:127.0.0.1:30080/30443 (k8s-worker-1, NodePorts ingress-nginx)
+              ↓
+ingress-nginx (Ingress resources por hostname)
+              ↓ TLS (cert-manager, Let's Encrypt)
+Service `test-web` → pods nginx
+```
 
-**Prerequisitos**: Fase 10 completada  
-**Duración Estimada**: 1-2 horas
+**Por qué este diseño**: DV0 tiene 1 vCPU y 394MB RAM, por lo que terminar TLS allí es costoso. Se optó por **passthrough total**: DV0 (módulo `stream`) reenvía los bytes TCP sin inspeccionarlos y el TLS lo termina ingress-nginx dentro del cluster. DV0 no puede alcanzar las IPs LAN de los containers (ruteo asimétrico), por eso los proxy apuntan a la IP WG del host D1 (`10.8.0.11`).
+
+**DNS previo**: registro wildcard `*.elarreglador.eu` → `82.223.50.169` (TTL 300) añadido en Spaceship, verificado con `test.elarreglador.eu` y `foo.elarreglador.eu`.
+
+**Procedimiento realizado**:
+
+1. **Instalar ingress-nginx** (vía helm en k8s-master-1) como NodePort fijo:
+   ```bash
+   helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+   helm install ingress-nginx ingress-nginx/ingress-nginx \
+     --namespace ingress-nginx --create-namespace \
+     --set controller.service.type=NodePort \
+     --set controller.service.nodePorts.http=30080 \
+     --set controller.service.nodePorts.https=30443 \
+     --set controller.kind=Deployment --wait --timeout 300s
+   ```
+
+2. **Añadir LXC proxy devices** en D1 (host) para el container k8s-worker-1:
+   ```bash
+   lxc config device add k8s-worker-1 proxy30080 proxy \
+     connect=tcp:127.0.0.1:30080 listen=tcp:10.8.0.11:30080
+   lxc config device add k8s-worker-1 proxy30443 proxy \
+     connect=tcp:127.0.0.1:30443 listen=tcp:10.8.0.11:30443
+   ```
+
+3. **Activar módulo stream en nginx DV0** e instalar el passthrough:
+   ```bash
+   apt install libnginx-mod-stream   # carga /etc/nginx/modules-enabled/50-mod-stream.conf
+   ```
+   Añadir a `/etc/nginx/nginx.conf`:
+   ```nginx
+   stream {
+       include /etc/nginx/stream.conf.d/*.conf;
+   }
+   ```
+   `/etc/nginx/stream.conf.d/k8s-passthrough.conf`:
+   ```nginx
+   upstream k8s_ingress_http  { server 10.8.0.11:30080; }
+   upstream k8s_ingress_https { server 10.8.0.11:30443; }
+
+   server { listen 80;  proxy_pass k8s_ingress_http;  proxy_timeout 300s; }
+   server { listen 443; proxy_pass k8s_ingress_https; proxy_timeout 300s; }
+   ```
+   Retirar el sitio HTTP antiguo (`sites-available/k8s` + symlink en sites-enabled) que ocupaba 80/443:
+   ```bash
+   nginx -t && systemctl reload nginx
+   ```
+
+4. **Instalar cert-manager** (vía helm en k8s-master-1):
+   ```bash
+   helm repo add jetstack https://charts.jetstack.io
+   helm install cert-manager jetstack/cert-manager \
+     --namespace cert-manager --create-namespace \
+     --version v1.17.2 --set crds.enabled=true --wait --timeout 300s
+   ```
+   Crear ClusterIssuer HTTP-01 (solver `ingress: { class: nginx }`) y Certificate para `elarreglador.eu`, `www.elarreglador.eu` y `test.elarreglador.eu` (secret TLS `elarreglador-eu-tls`).
+
+   **Nota**: HTTP-01 no emite wildcards (solo DNS-01 con acceso a la API del DNS). Como los subdominios son fijos, HTTP-01 es suficiente.
+
+5. **Crear Ingress resource** (`elarreglador-eu`, `ingressClassName: nginx`) con los tres hostnames → backend `test-web:80` y `nginx.ingress.kubernetes.io/force-ssl-redirect: "true"`.
+
+**Verificación**:
+```bash
+curl -sk https://test.elarreglador.eu   # → 200
+curl -sk https://www.elarreglador.eu    # → 200
+curl -sk https://elarreglador.eu        # → 200
+curl -s  http://test.elarreglador.eu    # → 308 → https://test.elarreglador.eu/
+echo | openssl s_client -connect test.elarreglador.eu:443 -servername test.elarreglador.eu \
+  | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
+# subject=CN = elarreglador.eu, issuer=Let's Encrypt, SANs: elarreglador.eu, test.*, www.*
+```
+
+**Notas**:
+- El certificado antiguo de DV0 (www + apex, certbot) fue retirado (`certbot delete --cert-name www.elarreglador.eu`) al quedar sin uso tras el passthrough.
+- El LXC proxy device `proxy31113` (Fase 10.1) fue retirado; `test-web` conserva su NodePort 31113 interno pero ya no se expone directamente.
+- La renovación del certificado la gestiona cert-manager automáticamente (HTTP-01 revalida ~30 días antes de expirar).
+
+**Prerequisitos**: Fase 10.1 completada, WireGuard operativo, wildcard DNS en Spaceship  
+**Duración Estimada**: 2-3 horas
 
 ---
 
@@ -1490,6 +1576,18 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - Deployment `test-web` (nginx:alpine, 2 réplicas) + Service NodePort en el cluster
   - Verificado: `curl https://www.elarreglador.eu` → 200
   - Detalle en [README.md#fase-101--exposición-pública-de-servicios](./README.md#fase-101--exposición-pública-de-servicios)
+
+- [x] **Fase 11: Nginx Ingress Controller (passthrough total)**:
+  - ingress-nginx instalado vía helm (NodePort fijo 30080/30443), namespace `ingress-nginx`
+  - LXC proxy devices `proxy30080`/`proxy30443` en k8s-worker-1 (10.8.0.11 → 127.0.0.1)
+  - nginx DV0 migrado a módulo `stream` (passthrough total, sin TLS) — retirado sitio HTTP antiguo
+  - cert-manager v1.17.2 (helm) + ClusterIssuer HTTP-01 `letsencrypt-http`
+  - Certificate multi-dominio `elarreglador.eu`/`www.*`/`test.*` emitido por Let's Encrypt (secret `elarreglador-eu-tls`, renovación automática)
+  - Ingress resource único enrutando los tres hostnames → `test-web` con `force-ssl-redirect`
+  - DNS wildcard `*.elarreglador.eu` → 82.223.50.169 añadido en Spaceship
+  - Retirados: certificado DV0 (certbot) y LXC proxy device `proxy31113`
+  - Verificado: HTTPS 200 en los tres dominios, HTTP → 308 → HTTPS, SANs correctos
+  - Detalle en [README.md#fase-11--nginx-ingress-controller](./README.md#fase-11--nginx-ingress-controller)
 
 ### En Progreso 🔄
 
