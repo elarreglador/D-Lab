@@ -11,6 +11,7 @@ Proyecto de virtualización y orquestación de contenedores usando LXC (Linux Co
 - [Tecnologías](#tecnologías)
 - [Documentación Técnica](#documentación-técnica)
 - [Guía de Instalación](#guía-de-instalación)
+- [Fase 10.1: Exposición Pública de Servicios](#fase-101--exposición-pública-de-servicios)
 - [Estado del Proyecto](#estado-del-proyecto)
 
 ---
@@ -185,6 +186,7 @@ Máquina virtual en IONOS para acceso externo al cluster:
 | [files/setup-d1-d2.sh](./files/setup-d1-d2.sh) | Script de configuración para D1/D2 |
 | [files/dv0-ssh-pubkey.txt](./files/dv0-ssh-pubkey.txt) | Instrucciones para obtener clave pública de DV0 |
 | [01-Network.md#gestión-remota-desde-dv0](./01-Network.md#gestión-remota-desde-dv0) | Configuración de kubectl y lxc remote en DV0 |
+| [README.md#fase-101--exposición-pública-de-servicios](./README.md#fase-101--exposición-pública-de-servicios) | Fase 10.1: Exposición pública de servicios K8s vía nginx DV0 + Let's Encrypt |
 
 ---
 
@@ -1250,6 +1252,96 @@ Un cluster expuesto sin controles de acceso es vulnerable. RBAC restringe qué p
 
 ---
 
+### Fase 10.1 | Exposición Pública de Servicios (nginx DV0 + Let's Encrypt)
+
+**Objetivo**: Publicar servicios del cluster Kubernetes en internet a través de DV0 como punto de entrada único con TLS (Let's Encrypt).
+
+Los Services de tipo ClusterIP o NodePort solo son alcanzables dentro de la red del cluster/LAN. Para exponer un servicio al exterior se construyó una cadena de proxy que aprovecha el túnel WireGuard y un LXC proxy device, sin necesidad de un Ingress Controller todavía (pendiente en Fase 11).
+
+**Arquitectura**:
+```
+Internet → elarreglador.eu (DNS A → 82.223.50.169)
+              ↓
+DV0 nginx (443, TLS Let's Encrypt)
+              ↓ proxy_pass
+http://10.8.0.11:31113 (túnel WireGuard → D1)
+              ↓
+LXC proxy device `proxy31113` (listen tcp:10.8.0.11:31113)
+              ↓ connect
+tcp:127.0.0.1:31113 (k8s-worker-1)
+              ↓
+Service NodePort `test-web` 80:31113/TCP → pods nginx
+```
+
+**Por qué esta cadena**: DV0 no puede alcanzar las IPs LAN de los containers (ruteo asimétrico — sus respuestas salen por el router doméstico que no conoce 10.8.0.0/24). Por eso el proxy apunta a la **IP WG del host D1** (`10.8.0.11`), donde el LXC proxy device escucha y reenvía al NodePort.
+
+**Procedimiento realizado**:
+
+1. **Desplegar el servicio de prueba** en k8s-master-1:
+   ```bash
+   kubectl create deployment test-web --image=nginx:alpine --replicas=2
+   kubectl expose deployment test-web --port=80 --type=NodePort --name=test-web
+   # El NodePort asignado es 31113: 80:31113/TCP
+   ```
+
+2. **Añadir LXC proxy device** en D1 (host) para el container k8s-worker-1:
+   ```bash
+   lxc config device add k8s-worker-1 proxy31113 proxy \
+     connect=tcp:127.0.0.1:31113 listen=tcp:10.8.0.11:31113
+   ```
+
+3. **Emitir certificado Let's Encrypt** en DV0:
+   ```bash
+   certbot certonly --nginx -d www.elarreglador.eu -d elarreglador.eu
+   # Certificado en /etc/letsencrypt/live/www.elarreglador.eu/
+   # Expiración: 2026-10-28 (renovación automática configurada)
+   ```
+
+4. **Configurar nginx** en `/etc/nginx/sites-available/k8s` (symlink en sites-enabled, default desactivado):
+   ```nginx
+   server {
+       listen 80;
+       server_name *.elarreglador.eu elarreglador.eu;
+       return 301 https://$server_name$request_uri;
+   }
+
+   server {
+       listen 443 ssl;
+       http2 on;
+       server_name www.elarreglador.eu elarreglador.eu;
+
+       ssl_certificate /etc/letsencrypt/live/www.elarreglador.eu/fullchain.pem;
+       ssl_certificate_key /etc/letsencrypt/live/www.elarreglador.eu/privkey.pem;
+
+       location / {
+           proxy_pass http://10.8.0.11:31113;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+       }
+   }
+   ```
+   ```bash
+   nginx -t && systemctl reload nginx
+   ```
+
+**Verificación**:
+```bash
+curl https://www.elarreglador.eu   # → 200 (nginx welcome)
+curl https://elarreglador.eu       # → 200
+```
+
+**Notas**:
+- **DNS**: solo existen registros A para `elarreglador.eu` y `www.elarreglador.eu` → `82.223.50.169`. No hay registro wildcard ni `test.*` (NXDOMAIN). El certificado Let's Encrypt **no cubre** subdominios adicionales: para exponer más hostnames hará falta crear registros DNS (o wildcard) en Spaceship y ampliar el certificado (Fase 11).
+- **TLS y balanceo**: actualmente TLS lo termina nginx de DV0 y todo apunta a un único NodePort. La migración a un Ingress Controller dentro del cluster (Fase 11) permitirá enrutar múltiples servicios por hostname desde un único punto.
+- Los handshakes WireGuard se mantienen frescos con `PersistentKeepalive=25` (ver [01-Network.md](./01-Network.md#wireguard-estabilidad-de-conexión)).
+
+**Prerequisitos**: Fase 10 completada, WireGuard operativo  
+**Duración Estimada**: 1-2 horas
+
+---
+
 ### Fase 11️ | Nginx Ingress Controller
 
 **Objetivo**: Configurar enrutamiento avanzado de tráfico
@@ -1391,6 +1483,13 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - Documentación de gestión remota en [01-Network.md#gestión-remota-desde-dv0](./01-Network.md#gestión-remota-desde-dv0)
   - Documentación de estabilidad WireGuard en [01-Network.md#wireguard-estabilidad-de-conexión](./01-Network.md#wireguard-estabilidad-de-conexión)
   - Documentación del split-tunnel y resolución de pérdida de conectividad en [01-Network.md#wireguard-estabilidad-y-split-tunnel](./01-Network.md#wireguard-estabilidad-y-split-tunnel)
+
+- [x] **Fase 10.1: Exposición Pública de Servicios**:
+  - nginx en DV0 como punto de entrada único con TLS (Let's Encrypt para `www.elarreglador.eu` y `elarreglador.eu`, expira 2026-10-28)
+  - Cadena de proxy: nginx DV0 → `http://10.8.0.11:31113` (WG) → LXC proxy device `proxy31113` → NodePort `test-web` 80:31113
+  - Deployment `test-web` (nginx:alpine, 2 réplicas) + Service NodePort en el cluster
+  - Verificado: `curl https://www.elarreglador.eu` → 200
+  - Detalle en [README.md#fase-101--exposición-pública-de-servicios](./README.md#fase-101--exposición-pública-de-servicios)
 
 ### En Progreso 🔄
 
