@@ -175,7 +175,8 @@ DNS = 10.8.0.1,1.8.0.1
 PublicKey = <SERVER_PUBLIC_KEY>
 PresharedKey = <PRESHARED_KEY_D1>
 Endpoint = 82.223.50.169:51820
-AllowedIPs = 0.0.0.0/0,::/0
+AllowedIPs = 10.8.0.1/32
+PersistentKeepalive = 25
 ```
 
 #### D2 (`files/wg0-client-d2.conf`)
@@ -190,8 +191,11 @@ DNS = 10.8.0.1,1.8.0.1
 PublicKey = <SERVER_PUBLIC_KEY>
 PresharedKey = <PRESHARED_KEY_D2>
 Endpoint = 82.223.50.169:51820
-AllowedIPs = 0.0.0.0/0,::/0
+AllowedIPs = 10.8.0.1/32
+PersistentKeepalive = 25
 ```
+
+> **Nota**: `AllowedIPs = 10.8.0.1/32` implementa **split-tunnel** (solo tráfico hacia DV0 por el túnel). El antiguo `0.0.0.0/0` (full-tunnel) causaba bucles de ruteo e interrupciones de internet en D1/D2 cuando WG caía. Ver [WireGuard: Estabilidad y Split-Tunnel](#wireguard-estabilidad-y-split-tunnel).
 
 ## Aplicación de la Configuración
 
@@ -412,26 +416,28 @@ Para que DV0 pueda alcanzar D1/D2 en sus IPs LAN (`192.168.1.x`) a través del t
 ### Client D1
 [Peer]
 PublicKey = <PUBKEY_D1>
-AllowedIPs = 10.8.0.11/32, 192.168.1.11/32, fd42:42:42::11/128
+AllowedIPs = 10.8.0.11/32, fd42:42:42::11/128, 192.168.1.11/32, 192.168.1.21/32, 192.168.1.30/32, 192.168.1.31/32
 
 ### Client D2
 [Peer]
 PublicKey = <PUBKEY_D2>
-AllowedIPs = 10.8.0.12/32, 192.168.1.12/32, fd42:42:42::12/128
+AllowedIPs = 10.8.0.12/32, fd42:42:42::12/128, 192.168.1.12/32, 192.168.1.22/32, 192.168.1.32/32
 ```
 
-Además, se añade una ruta estática en DV0:
+Las IPs `.21/.22` (masters) y `.30/.31/.32` (VIP + workers) se anuncian en el peer correspondiente (D1 o D2) para que DV0 las alcance a través del túnel.
+
+Además, se añade una ruta estática en DV0 (con `replace` para que sea idempotente en el `PostUp`):
 
 ```bash
-ip route add 192.168.1.0/24 dev wg0
+ip route replace 192.168.1.0/24 dev wg0
 ```
 
 Aplicar en caliente:
 
 ```bash
-wg set wg0 peer <PUBKEY_D1> allowed-ips 10.8.0.11/32,192.168.1.11/32,fd42:42:42::11/128
-wg set wg0 peer <PUBKEY_D2> allowed-ips 10.8.0.12/32,192.168.1.12/32,fd42:42:42::12/128
-ip route add 192.168.1.0/24 dev wg0
+wg set wg0 peer <PUBKEY_D1> allowed-ips 10.8.0.11/32,fd42:42:42::11/128,192.168.1.11/32,192.168.1.21/32,192.168.1.30/32,192.168.1.31/32
+wg set wg0 peer <PUBKEY_D2> allowed-ips 10.8.0.12/32,fd42:42:42::12/128,192.168.1.12/32,192.168.1.22/32,192.168.1.32/32
+ip route replace 192.168.1.0/24 dev wg0
 ```
 
 ---
@@ -455,7 +461,7 @@ Se añadió `PersistentKeepalive = 25` en la sección `[Peer]` de ambas configur
 PublicKey = <SERVER_PUBLIC_KEY>
 PresharedKey = <PRESHARED_KEY>
 Endpoint = 82.223.50.169:51820
-AllowedIPs = 0.0.0.0/0,::/0
+AllowedIPs = 10.8.0.1/32
 PersistentKeepalive = 25   # <-- añadido
 ```
 
@@ -468,4 +474,88 @@ wg set wg0 peer <PUBLIC_KEY_DEL_SERVIDOR> persistent-keepalive 25
 ```
 
 Editar también `/etc/wireguard/wg0.conf` para que persista tras reinicio.
+
+---
+
+## WireGuard: Estabilidad y Split-Tunnel
+
+### Problema: Pérdida total de conectividad DV0 → D1/D2
+
+El 31-jul-2026, tras un cambio de red local, DV0 perdió toda conectividad con D1 y D2 a través de WireGuard. El diagnóstico reveló dos fallos independientes, ambos provocados por **manipulación manual de las reglas de ruteo** (`ip rule`/`ip route`) en sesiones anteriores, dejando el estado de red inconsistente con la configuración de `wg-quick`.
+
+### Diagnóstico
+
+| Nodo | Síntoma | Causa raíz |
+|------|---------|------------|
+| **D1** | Handshake muerto (16h). Ping a 10.8.0.1 sin respuesta | Regla manual `ip rule add fwmark 0xca6c lookup 51820` (resto de sesión previa) + ruta residual `default dev wg0` en tabla 51820 (del antiguo full-tunnel). Los paquetes del socket WG (marcados con fwmark) caían en esa regla, se reinyectaban en `wg0` → **bucle de ruteo** → nunca salían por la LAN. |
+| **D2** | Handshake activo pero tráfico interior sin respuesta | Config seguía en full-tunnel (`AllowedIPs = 0.0.0.0/0`) y sin reglas de wg-quick aplicadas (tabla 51820 huérfana). `ip route get 10.8.0.1` resolvía a `via 192.168.1.1` (router LAN) en vez de `dev wg0` → el tráfico se descartaba en el router doméstico. |
+| **DV0** | OK | Config y `PostUp` correctos. (El `ping 82.223.50.169` falla desde los clientes porque IONOS bloquea ICMP; no es síntoma.) |
+
+**Causa raíz común**: gestionar el ruteo de WG a mano en vez de dejar que `wg-quick` lo genere automáticamente desde `/etc/wireguard/wg0.conf`. Cualquier cambio manual se pierde o queda a medias, y `wg-quick` no vuelve a regenerarlo mientras la interfaz siga arriba.
+
+### Solución aplicada
+
+**1. D1 — Reinicio limpio de wg-quick** (regenera las reglas desde la config, eliminando el bucle):
+
+```bash
+sudo cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.bak
+sudo wg-quick down wg0
+sudo wg-quick up wg0
+```
+
+**2. D2 — Migración a split-tunnel + reinicio limpio:**
+
+```bash
+sudo cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.bak
+# Cambiar en /etc/wireguard/wg0.conf:
+#   AllowedIPs = 0.0.0.0/0,::/0   →   AllowedIPs = 10.8.0.1/32
+sudo wg-quick down wg0
+sudo wg-quick up wg0
+```
+
+**3. Reenvío IP persistente** en D1 y D2 (para permitir tráfico LAN↔WG en el host):
+
+```bash
+echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -w net.ipv4.ip_forward=1   # en caliente (D2)
+```
+
+**4. nginx en DV0** — se eliminó el túnel SSH reverso que servía de muleta y el proxy apunta directamente a la IP WG de D1 vía LXD proxy device:
+
+```bash
+# En /etc/nginx/sites-available/k8s
+proxy_pass http://10.8.0.11:31113;   # en vez de http://127.0.0.1:31113
+sudo nginx -t && sudo systemctl reload nginx
+# En D1: matar el proceso del túnel SSH reverso
+```
+
+**5. Endurecer PostUp en DV0** (evita fallo de restart si la ruta ya existe):
+
+```bash
+# En /etc/wireguard/wg0.conf
+PostUp = ip route replace 192.168.1.0/24 dev wg0
+```
+
+### Por qué split-tunnel
+
+| Modo | AllowedIPs | Consecuencia |
+|------|-----------|--------------|
+| **Full-tunnel** (antes) | `0.0.0.0/0,::/0` | Todo el tráfico de D1/D2 pasa por WG. Si WG cae, pierden internet; si el ruteo se rompe, hay bucles. |
+| **Split-tunnel** (ahora) | `10.8.0.1/32` | Solo el tráfico hacia DV0 (y redes anunciadas por el peer) entra al túnel. D1/D2 mantienen su gateway LAN normal. Más estable y sin riesgo de bucle. |
+
+### Verificación final
+
+```bash
+# En DV0
+ping 10.8.0.11   # ✓ responde (~16ms)
+ping 10.8.0.12   # ✓ responde (~16ms)
+curl http://10.8.0.11:31113   # ✓ 200 (nginx welcome)
+curl https://www.elarreglador.eu   # ✓ 200
+```
+
+Ambos `wg-quick@wg0` están `enabled` y el estado de ruteo se regenera solo en cada boot.
+
+### Nota: acceso a IPs LAN de los containers
+
+DV0 **no puede hacer ping** a las IPs LAN de los containers LXC (`192.168.1.21/.22/.31/.32`): sus rutas por defecto apuntan al router doméstico (`via 192.168.1.1`), que no conoce la red `10.8.0.0/24` → la respuesta se pierde (ruteo asimétrico). **No es un problema**: los servicios se exponen a través de la IP WG del host D1 (`10.8.0.11`) con LXC proxy devices, cuyo retorno sí es simétrico. Para alcanzar los containers directamente habría que añadir una ruta estática en el router o rutas dentro de cada container — innecesario hoy.
 

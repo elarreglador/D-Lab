@@ -380,15 +380,15 @@ DV0 no puede alcanzar las IPs LAN (192.168.1.x) directamente. Para que DV0 se co
 1. En DV0, añadir las IPs LAN a los `AllowedIPs` de cada peer en `/etc/wireguard/wg0.conf`:
    ```ini
    # Peer D1
-   AllowedIPs = 10.8.0.11/32, 192.168.1.11/32, fd42:42:42::11/128
+   AllowedIPs = 10.8.0.11/32, fd42:42:42::11/128, 192.168.1.11/32, 192.168.1.21/32, 192.168.1.30/32, 192.168.1.31/32
 
    # Peer D2
-   AllowedIPs = 10.8.0.12/32, 192.168.1.12/32, fd42:42:42::12/128
+   AllowedIPs = 10.8.0.12/32, fd42:42:42::12/128, 192.168.1.12/32, 192.168.1.22/32, 192.168.1.32/32
    ```
 
-2. Añadir ruta estática en `PostUp` de wg0.conf:
+2. Añadir ruta estática en `PostUp` de wg0.conf (usar `replace` para que sea idempotente):
    ```bash
-   ip route add 192.168.1.0/24 dev wg0
+   ip route replace 192.168.1.0/24 dev wg0
    ```
 
 #### Configuración del Cliente LXC
@@ -1380,6 +1380,7 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - VM IONOS (Ubuntu 26.04) con dominio elarreglador.eu
   - WireGuard VPN server reinstaurado (10.8.0.1/24, puerto 51820)
   - WireGuard estabilizado con `PersistentKeepalive=25` en D1/D2 (evita caída del túnel por NAT timeout)
+  - WireGuard migrado a **split-tunnel** (`AllowedIPs = 10.8.0.1/32`) en D1/D2 — elimina bucles de ruteo y la dependencia de internet por el túnel (ver [01-Network.md#wireguard-estabilidad-y-split-tunnel](./01-Network.md#wireguard-estabilidad-y-split-tunnel))
   - kubectl v1.32 instalado y configurado (kubeconfig vía LXC proxy device 10.8.0.11:6443)
   - LXD client instalado y configurado (remote `d2` apuntando a `https://10.8.0.12:8443`)
   - Clave SSH generada para acceso a D1/D2
@@ -1389,6 +1390,7 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - Repositorio sanitizado: `filter-branch` para eliminar claves reales del historial git
   - Documentación de gestión remota en [01-Network.md#gestión-remota-desde-dv0](./01-Network.md#gestión-remota-desde-dv0)
   - Documentación de estabilidad WireGuard en [01-Network.md#wireguard-estabilidad-de-conexión](./01-Network.md#wireguard-estabilidad-de-conexión)
+  - Documentación del split-tunnel y resolución de pérdida de conectividad en [01-Network.md#wireguard-estabilidad-y-split-tunnel](./01-Network.md#wireguard-estabilidad-y-split-tunnel)
 
 ### En Progreso 🔄
 
