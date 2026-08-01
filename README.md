@@ -13,6 +13,7 @@ Proyecto de virtualización y orquestación de contenedores usando LXC (Linux Co
 - [Guía de Instalación](#guía-de-instalación)
 - [Fase 10.1: Exposición Pública de Servicios](#fase-101--exposición-pública-de-servicios)
 - [Fase 11: Nginx Ingress Controller](#fase-11--nginx-ingress-controller)
+- [Fase 12: Monitoreo y Observabilidad](#fase-12--monitoreo-y-observabilidad)
 - [Estado del Proyecto](#estado-del-proyecto)
 
 ---
@@ -189,6 +190,7 @@ Máquina virtual en IONOS para acceso externo al cluster:
 | [01-Network.md#gestión-remota-desde-dv0](./01-Network.md#gestión-remota-desde-dv0) | Configuración de kubectl y lxc remote en DV0 |
 | [README.md#fase-101--exposición-pública-de-servicios](./README.md#fase-101--exposición-pública-de-servicios) | Fase 10.1: Exposición pública de servicios K8s vía nginx DV0 + Let's Encrypt |
 | [README.md#fase-11--nginx-ingress-controller](./README.md#fase-11--nginx-ingress-controller) | Fase 11: Ingress Controller passthrough total (nginx DV0 stream → ingress-nginx) + cert-manager |
+| [README.md#fase-12--monitoreo-y-observabilidad](./README.md#fase-12--monitoreo-y-observabilidad) | Fase 12: kube-prometheus-stack (Prometheus/Grafana/AlertManager) + node-exporter hosts + alertas |
 
 ---
 
@@ -1449,17 +1451,85 @@ echo | openssl s_client -connect test.elarreglador.eu:443 -servername test.elarr
 
 ### Fase 12️ | Monitoreo y Observabilidad
 
-**Objetivo**: Implementar stack de monitoreo
+**Objetivo**: Desplegar un stack de monitoreo completo (Prometheus + Grafana + AlertManager) con métricas de cluster y de los hosts físicos, expuesto públicamente con autenticación.
 
-Sin métricas ni logs, operar un cluster es como volar a ciegas. Prometheus recolecta métricas de todos los nodos y servicios, Grafana las visualiza en paneles y AlertManager notifica cuando algo va mal.
+Sin métricas ni logs, operar un cluster es como volar a ciegas. Prometheus recolecta métricas de todos los nodos y servicios, Grafana las visualiza en paneles y AlertManager agrupa y muestra las alertas.
 
-- [ ] Instalar Prometheus
-- [ ] Instalar Grafana
-- [ ] Instalar AlertManager
-- [ ] Instalar node-exporter en nodos host
-- [ ] Crear alertas personalizadas
+**Arquitectura**:
+```
+kube-prometheus-stack (helm, namespace monitoring)
+  ├─ prometheus-operator ── gestiona Prometheus/AlertManager vía CRDs
+  ├─ prometheus-0        ── scrape: kubelet, apiserver, coredns, node-exporter,
+  │                         kube-state-metrics, host-node (D1/D2), cert-manager
+  ├─ grafana (3/3)       ── exposed en https://grafana.elarreglador.eu
+  ├─ alertmanager        ── sin receiver (alertas solo UI)
+  └─ node-exporter DS    ── métricas de los 4 nodos K8s
+node-exporter nativo en D1/D2 (apt) ── métricas de los hosts físicos (OS)
+```
 
-**Prerequisitos**: Fase 11 completada  
+**Decisiones de diseño**:
+- **Almacenamiento efímero** (`emptyDir`) para Prometheus y Grafana: la TSDB de Prometheus sobre GlusterFS/NFS no es fiable (el primer intento con PVC NFS dejó `prometheus-0` sin poder arrancar la TSDB). La configuración vive en ConfigMaps/Secrets, así que se pierde solo el histórico. AlertManager sí conserva su PVC NFS (funciona correctamente).
+- **Recursos ajustados**: el primer despliegue hizo OOM a Grafana (límite 256Mi → `exitCode 137`). Se subió a 512Mi/200Mi. DV0 con 1 vCPU no soportaría este stack; por eso corre en los nodos del cluster.
+- **Node-exporter host en ambos modos**: DaemonSet para los 4 nodos K8s + paquete nativo `prometheus-node-exporter` en D1/D2 (métricas del OS físico del host, no del container).
+- **Alertas sin notificación**: solo se ven en la UI de AlertManager (sin receiver). El usuario decidió no configurar envíos externos en esta fase.
+
+**Limitación de red descubierta (macvlan)**:
+Los containers LXD usan red **macvlan** (`macvlan0`), que por diseño impide que un container alcance a su **propio host**. D1 no es alcanzable desde los containers que corren en D1 (ni por IP LAN ni WG), mientras que D2 sí es alcanzable (los containers de D1 llegan a `192.168.1.12`). Solución adoptada para D1:
+- `socat` en D2 como relay: `TCP4-LISTEN:19100 → TCP4:192.168.1.11:9100` (servicio systemd `node-exporter-relay-d1`).
+- El ServiceMonitor `host-node` scrapea D2 directo (`:9100`) y D1 vía relay (`:19100`), con relabeling `host=d2`/`host=d1`.
+
+**Procedimiento realizado**:
+
+1. **Instalar kube-prometheus-stack** (vía helm en k8s-master-1), namespace `monitoring`, con `values-monitoring.yaml`:
+   ```bash
+   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+     --namespace monitoring --create-namespace \
+     --values /root/values-monitoring.yaml --wait --timeout 300s
+   ```
+   Values destacados: Prometheus/Grafana efímeros, Grafana `requests 200Mi/limits 512Mi`, `adminPassword` generada, AlertManager con PVC NFS.
+
+   **Incidencias resueltas**: (1) Grafana OOM con 256Mi → límite a 512Mi. (2) Prometheus sin arrancar la TSDB sobre PVC NFS → storage efímero. (3) `helm upgrade --wait` en estado `failed` → desinstalar y reinstalar limpio con los values corregidos (causa raíz: el values subido al container era una versión antigua, el `lxc file push` no se había repetido tras editar el local).
+
+2. **node-exporter nativo en D1/D2**:
+   ```bash
+   apt-get install -y prometheus-node-exporter   # escucha en 0.0.0.0:9100
+   ```
+   Durante este paso se detectó que **systemd-resolved de D1/D2 no resolvía** (los intentos de apt quedaban colgados). El stub `127.0.0.53` no respondía aunque los upstream (1.1.1.1/8.8.8.8) sí resolvían por `nslookup` directo. Solución de laboratorio: `resolv.conf` estático con `nameserver 1.1.1.1`/`8.8.8.8`.
+   Manifiestos: Service headless `host-node` (ports 9100/19100) + Endpoints manuales + ServiceMonitor `host-node` (con label `release: kube-prometheus-stack`, requerida por el `serviceMonitorSelector` de Prometheus).
+
+3. **Grafana público con basic auth**:
+   - Secret `grafana-basic-auth` (htpasswd `$apr1$`, usuario `admin`, password generada).
+   - Ingress `grafana` con `auth-type: basic`, `force-ssl-redirect`, TLS → `grafana.elarreglador.eu`.
+   - Certificate `grafana-elarreglador-eu` (cert-manager, HTTP-01) en namespace `monitoring` — los secrets TLS deben vivir en el mismo namespace que el Ingress, por eso no se reutilizó el secret `elarreglador-eu-tls` (que está en `default`).
+
+4. **ServiceMonitor cert-manager** (Service `cert-manager:9402` en namespace `cert-manager`) + **PrometheusRule `alertas-personalizadas`** (grupo `host-alertas`): `HostDown` (hosts), `ClusterNodeNotReady`, `DiskPressureHost` (>85%), `CertificateExpiring` (<30 días).
+
+**Verificación**:
+```bash
+# Public path: basic auth 401 sin credenciales, 200 con ellas
+curl -s -o /dev/null -w '%{http_code}\n' https://grafana.elarreglador.eu/          # 401
+curl -s -o /dev/null -w '%{http_code}\n' -u admin:PASS https://grafana.elarreglador.eu/login  # 200
+echo | openssl s_client -connect grafana.elarreglador.eu:443 -servername grafana.elarreglador.eu \
+  | openssl x509 -noout -subject -issuer -dates   # CN=grafana.elarreglador.eu, Let's Encrypt
+
+# Targets Prometheus (API v1): host-node x2 up, cert-manager up, node-exporter x4 up
+curl -s http://127.0.0.1:9090/api/v1/targets   # (vía port-forward)
+
+# Datos de hosts con label correcta
+curl -s 'http://127.0.0.1:9090/api/v1/query?query=node_uname_info'
+# d1 → D1 (192.168.1.12:19100), d2 → D2 (192.168.1.12:9100)
+```
+
+**Credenciales** (guardar en backup local):
+- Grafana admin: `admin` / password en `values-monitoring.yaml` (`adminPassword`).
+- Basic auth nginx (Ingress): `admin` / password generada en Secret `grafana-basic-auth`.
+
+**Notas**:
+- Las alertas por defecto de kube-prometheus-stack `TargetDown`, `etcdMembersDown` e `etcdInsufficientMembers` aparecen **firing** en AlertManager porque los targets `kube-etcd`, `kube-scheduler`, `kube-controller-manager` y `kube-proxy` no exponen métricas en los puertos por defecto en este cluster LXC. Es ruido esperable en esta configuración; la cadena principal (kubelet, apiserver, coredns, node-exporter, hosts) está **up**.
+- `Watchdog` siempre está en firing por diseño (alerta centinela para validar el pipeline).
+
+**Prerequisitos**: Fase 11 completada, WireGuard operativo, DNS wildcard en Spaceship  
 **Duración Estimada**: 3-4 horas
 
 ---
@@ -1588,6 +1658,18 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - Retirados: certificado DV0 (certbot) y LXC proxy device `proxy31113`
   - Verificado: HTTPS 200 en los tres dominios, HTTP → 308 → HTTPS, SANs correctos
   - Detalle en [README.md#fase-11--nginx-ingress-controller](./README.md#fase-11--nginx-ingress-controller)
+
+- [x] **Fase 12: Monitoreo y Observabilidad**:
+  - kube-prometheus-stack (helm): Prometheus, Grafana, AlertManager, prometheus-operator, kube-state-metrics, node-exporter DaemonSet — namespace `monitoring`
+  - Almacenamiento efímero para Prometheus/Grafana (TSDB sobre NFS no fiable; se perdió tiempo en ello)
+  - Recursos ajustados: Grafana 512Mi/200Mi (evita OOM), Prometheus 2Gi/600Mi
+  - node-exporter nativo en D1/D2 (`apt`) + Service/Endpoints/ServiceMonitor `host-node` — D1 scrapeado vía relay socat en D2 (:19100) por limitación macvlan container↔host
+  - `resolv.conf` estático en D1/D2 (systemd-resolved roto bloqueaba apt)
+  - Grafana público en `https://grafana.elarreglador.eu` con basic auth (Ingress + Secret htpasswd) y Certificate Let's Encrypt dedicado en `monitoring`
+  - ServiceMonitor cert-manager + PrometheusRule `alertas-personalizadas` (HostDown, ClusterNodeNotReady, DiskPressureHost, CertificateExpiring)
+  - AlertManager sin receiver (alertas solo UI)
+  - Verificado: targets up (host-node ×2, cert-manager), HTTPS 401/200, cert válido, métricas `node_uname_info` con labels `host=d1`/`host=d2`
+  - Detalle en [README.md#fase-12--monitoreo-y-observabilidad](./README.md#fase-12--monitoreo-y-observabilidad)
 
 ### En Progreso 🔄
 
