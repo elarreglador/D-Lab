@@ -1810,7 +1810,7 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
 - **Alimentación**: Ambos nodos disponen de SAI
   - Apagar graceful del nodo worker ante corte eléctrico prolongado
 
-- **Almacenamiento en workers**: GlusterFS + NFS-Ganesha + Keepalived se ejecutan en los workers (k8s-worker-1, k8s-worker-2). Si un worker cae, el otro sigue sirviendo el NFS (gracias a GlusterFS replica 2 + VIP). Sin embargo, los datos solo son accesibles por pods corriendo en workers; los control-planes no montan el NFS directamente.
+- **Almacenamiento en workers**: GlusterFS + NFS-Ganesha + Keepalived se ejecutan en los workers (k8s-worker-1, k8s-worker-2). Si un worker cae, el otro sigue sirviendo el NFS (gracias a GlusterFS replica 2 + VIP). Los control-planes **no requieren almacenamiento compartido**: etcd usa disco local del contenedor (`/var/lib/etcd`, hostPath sobre ZFS local de D1/D2) y el resto de componentes del control-plane son stateless; la durabilidad de etcd la cubre el DR (backups diarios). NFS es accesible por red desde cualquier nodo (VIP 192.168.1.30), así que un pod en un master también puede montarlo si lo necesita.
 
 - **Kubernetes en LXC**: Se requieren configuraciones especiales
 
