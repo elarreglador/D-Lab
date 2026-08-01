@@ -188,6 +188,7 @@ Máquina virtual en IONOS para acceso externo al cluster:
 | [README.md#fase-101--exposición-pública-de-servicios](./README.md#fase-101--exposición-pública-de-servicios) | Fase 10.1: Exposición pública de servicios K8s vía nginx DV0 + Let's Encrypt |
 | [README.md#fase-11--nginx-ingress-controller](./README.md#fase-11--nginx-ingress-controller) | Fase 11: Ingress Controller passthrough total (nginx DV0 stream → ingress-nginx) + cert-manager |
 | [README.md#fase-12--monitoreo-y-observabilidad](./README.md#fase-12--monitoreo-y-observabilidad) | Fase 12: kube-prometheus-stack (Prometheus/Grafana/AlertManager) + node-exporter hosts + alertas |
+| [incidentes/dr-restore.md](./incidentes/dr-restore.md) | Estrategia de disaster recovery: backups etcd redundantes en ambos masters + procedimientos de restauración (RPO/RTO) |
 
 ---
 
@@ -1632,9 +1633,11 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
 - [x] etcd replicado (stacked, 2 miembros)
 - [ ] Agregar tercer nodo (D3) para quorum etcd (3 nodos mínimo)
 - [x] Implementar Pod Disruption Budgets
-- [ ] Crear estrategia de disaster recovery
+- [x] Crear estrategia de disaster recovery
 
 **Pod Disruption Budgets (2026-08-01)**: aplicados 6 PDBs con `minAvailable: 1` sobre los workloads críticos (manifiestos en `files/pdbs/`): `coredns` y `landing` (2 réplicas → permiten 1 disruption), `ingress-nginx-controller`, `prometheus`, `grafana` y `alertmanager` (1 réplica → `ALLOWED DISRUPTIONS=0`, la eviction queda bloqueada). **Caveat**: un PDB `minAvailable: 1` sobre un workload de réplica única hace que `kubectl drain` se bloquee; para mantenimiento de nodo hay que escalar temporalmente o pausar el PDB. Los PDBs protegen solo contra disrupciones *voluntarias* (drains/upgrades), no contra fallos involuntarios de host. No aplican a static pods (etcd) ni aportan a DaemonSets (flannel, kube-proxy, node-exporter) ni a workloads de baja criticidad (cert-manager, operator, kube-state-metrics, provisioner).
+
+**Disaster Recovery (2026-08-01)**: backups de etcd redundantes en **ambos** control-planes (`/usr/local/bin/backup-etcd.sh`, idéntico en los dos, copia canónica en `files/backup-etcd.sh`). Usa `crictl exec` sobre el pod etcd **local** (no depende del API Server → funciona aunque el peer esté caído, cerrando el hueco de backups de julio). Cada master guarda su snapshot en `/backup/etcd/` (rotación 30) y la envía por SSH al peer — con 2 copias por snapshot en nodos distintos. RPO=24 h, RTO≈15-30 min. Sin copia offsite (decisión del señor). Procedimientos en [incidentes/dr-restore.md](./incidentes/dr-restore.md).
 
 **Nota técnica**: etcd con 2 miembros es funcional pero no tolera fallos de un control-plane (pierde quorum). Para HA real se necesita un tercer miembro (D3 o miembro externo).
 
@@ -1779,10 +1782,13 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - 6 PDBs `minAvailable: 1` (coredns, landing, ingress-nginx-controller, prometheus, grafana, alertmanager)
   - Manifiestos en `files/pdbs/`; detalle en [Fase 13](#fase-13--resiliencia-y-alta-disponibilidad)
 
+- [x] **Fase 13: Disaster Recovery**:
+  - Backups etcd redundantes en ambos control-planes (`files/backup-etcd.sh`, `crictl exec` sobre etcd local) + copia por SSH al peer
+  - Procedimientos de restauración y RPO/RTO en [incidentes/dr-restore.md](./incidentes/dr-restore.md)
+
 ### En Progreso 🔄
 
 - [ ] **Fase 13**: tercer nodo de control-plane (D3) para quorum etcd (3 miembros mínimo)
-- [ ] **Fase 13**: estrategia de disaster recovery
 
 ### Pendiente ⏳
 
