@@ -1504,7 +1504,10 @@ Los containers LXD usan red **macvlan** (`macvlan0`), que por diseño impide que
 3. **Grafana público con clave de acceso web** (ver [Clave única de acceso web](#clave-única-de-acceso-web)):
    - Ingress `grafana` con `auth-type: basic`, `force-ssl-redirect`, TLS → `grafana.elarreglador.eu`.
    - Certificate `grafana-elarreglador-eu` (cert-manager, HTTP-01) en namespace `monitoring` — los secrets TLS deben vivir en el mismo namespace que el Ingress, por eso no se reutilizó el secret `elarreglador-eu-tls` (que está en `default`).
-   - Grafana configurado con **anonymous Viewer** (`grafana.ini` → `auth.anonymous`): la clave compartida es la única barrera, sin login interno.
+   - Grafana sin anonymous: **login admin** (`admin` / `adminPassword` de `values-monitoring.yaml`). La clave de acceso web (`web-basic-auth`) sigue como barrera externa en el Ingress.
+   - `grafana.ini` (via `grafana.grafana.ini` en `values-monitoring.yaml`):
+     - `server.root_url = https://grafana.elarreglador.eu/` + `server.domain = grafana.elarreglador.eu` — **obligatorio** detrás del proxy TLS: sin ellos Grafana inyecta `appUrl=http://localhost:3000/` al frontend, lo que provoca que la sesión se pierda al navegar y el login reaparezca en cada página.
+     - `security.cookie_secure = true` + `security.cookie_samesite = lax` — cookie de sesión solo por HTTPS.
 
 4. **ServiceMonitor cert-manager** (Service `cert-manager:9402` en namespace `cert-manager`) + **PrometheusRule `alertas-personalizadas`** (grupo `host-alertas`): `HostDown` (hosts), `ClusterNodeNotReady`, `DiskPressureHost` (>85%), `CertificateExpiring` (<30 días).
 
@@ -1512,7 +1515,7 @@ Los containers LXD usan red **macvlan** (`macvlan0`), que por diseño impide que
 ```bash
 # Public path: clave de acceso web 401 sin credenciales, 200 con ellas
 curl -s -o /dev/null -w '%{http_code}\n' https://grafana.elarreglador.eu/   # 401
-curl -s -o /dev/null -w '%{http_code}\n' -u elarreglador:CLAVE https://grafana.elarreglador.eu/  # 200 (carga sin login interno)
+curl -s -o /dev/null -w '%{http_code}\n' -u elarreglador:CLAVE https://grafana.elarreglador.eu/  # 200 (login de Grafana tras la basic-auth)
 echo | openssl s_client -connect grafana.elarreglador.eu:443 -servername grafana.elarreglador.eu \
   | openssl x509 -noout -subject -issuer -dates   # CN=grafana.elarreglador.eu, Let's Encrypt
 
@@ -1530,6 +1533,8 @@ curl -s 'http://127.0.0.1:9090/api/v1/query?query=node_uname_info'
 - Grafana admin (mantenimiento): `admin` / password en `values-monitoring.yaml` (`adminPassword`).
 
 **Notas**:
+- **Incidencia resuelta**: Grafana pedía login en cada página. Causa raíz: falta de `root_url`/`domain` → el frontend recibía `appUrl=http://localhost:3000/` y la sesión se perdía al navegar. Se corrigió en `values-monitoring.yaml` (`server.root_url`/`domain` + `security.cookie_secure`/`cookie_samesite`) y se aplicó con `helm upgrade` en k8s-master-1 (backup previo en `/root/values-monitoring.yaml.bak-*`). Verificado: `appUrl=https://grafana.elarreglador.eu/`, login persiste entre páginas, basic-auth intacta (401 sin credenciales).
+- **Ojo con Grafana 13**: el endpoint `POST /login` espera **JSON** (`Content-Type: application/json`, cuerpo `{"user":...,"password":...}`), no form-urlencoded.
 - Las alertas por defecto de kube-prometheus-stack `TargetDown`, `etcdMembersDown` e `etcdInsufficientMembers` aparecen **firing** en AlertManager porque los targets `kube-etcd`, `kube-scheduler`, `kube-controller-manager` y `kube-proxy` no exponen métricas en los puertos por defecto en este cluster LXC. Es ruido esperable en esta configuración; la cadena principal (kubelet, apiserver, coredns, node-exporter, hosts) está **up**.
 - `Watchdog` siempre está en firing por diseño (alerta centinela para validar el pipeline).
 
