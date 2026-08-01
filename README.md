@@ -1631,8 +1631,10 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
 - [x] Agregar segundo control-plane (k8s-master-2 en D2)
 - [x] etcd replicado (stacked, 2 miembros)
 - [ ] Agregar tercer nodo (D3) para quorum etcd (3 nodos mínimo)
-- [ ] Implementar Pod Disruption Budgets
+- [x] Implementar Pod Disruption Budgets
 - [ ] Crear estrategia de disaster recovery
+
+**Pod Disruption Budgets (2026-08-01)**: aplicados 6 PDBs con `minAvailable: 1` sobre los workloads críticos (manifiestos en `files/pdbs/`): `coredns` y `landing` (2 réplicas → permiten 1 disruption), `ingress-nginx-controller`, `prometheus`, `grafana` y `alertmanager` (1 réplica → `ALLOWED DISRUPTIONS=0`, la eviction queda bloqueada). **Caveat**: un PDB `minAvailable: 1` sobre un workload de réplica única hace que `kubectl drain` se bloquee; para mantenimiento de nodo hay que escalar temporalmente o pausar el PDB. Los PDBs protegen solo contra disrupciones *voluntarias* (drains/upgrades), no contra fallos involuntarios de host. No aplican a static pods (etcd) ni aportan a DaemonSets (flannel, kube-proxy, node-exporter) ni a workloads de baja criticidad (cert-manager, operator, kube-state-metrics, provisioner).
 
 **Nota técnica**: etcd con 2 miembros es funcional pero no tolera fallos de un control-plane (pierde quorum). Para HA real se necesita un tercer miembro (D3 o miembro externo).
 
@@ -1773,10 +1775,13 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - Auditoría API Server: policy + logs en ambos masters
   - Backups etcd: script diario + rotación a `/backup/etcd/`
 
+- [x] **Fase 13: Pod Disruption Budgets**:
+  - 6 PDBs `minAvailable: 1` (coredns, landing, ingress-nginx-controller, prometheus, grafana, alertmanager)
+  - Manifiestos en `files/pdbs/`; detalle en [Fase 13](#fase-13--resiliencia-y-alta-disponibilidad)
+
 ### En Progreso 🔄
 
 - [ ] **Fase 13**: tercer nodo de control-plane (D3) para quorum etcd (3 miembros mínimo)
-- [ ] **Fase 13**: Pod Disruption Budgets
 - [ ] **Fase 13**: estrategia de disaster recovery
 
 ### Pendiente ⏳
