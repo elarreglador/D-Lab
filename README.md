@@ -1800,15 +1800,6 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
 
 - **etcd con 2 miembros**: El cluster etcd tolera la caída de un control-plane pero pierde quorum (necesita mayoría = 2 de 2). Con 3 miembros toleraría 1 fallo. Alternativa: añadir un miembro etcd externo o un tercer nodo D3.
 
-### Limpieza de restos (2026-08-01)
-
-Restos del historial del cluster, **ya limpiados** el 2026-08-01:
-
-- **Namespace `rook-ceph` en `Terminating`** (desde 2026-07-09): retiraba recursos con finalizers (`cephcluster`, `clientprofile`, configmap `rook-ceph-mon-endpoints`, secret `rook-ceph-mon`) bloqueados por `ceph.rook.io/disaster-protection`, `cephcluster.ceph.rook.io` y `csi.ceph.com/cleanup`. Se parchearon los finalizers a `[]`, se eliminaron los recursos y el namespace. Además se retiraron las **15 CRDs** de Rook/Ceph (`*.rook.io`, `*.csi.ceph.io`).
-- **PV `pvc-150b895b-ae83-404e-a869-c5e37aa2a49e` Released** (storageClass `longhorn`, reclaim Delete): resto de la prueba Longhorn, eliminado.
-- **PVC `test-nfs-pvc`** (Bound, 100Mi, `nfs-storage`): PVC de pruebas del provisioner, eliminado (el provisioner retiró su subdirectorio y el PV por reclaim Delete).
-- **Secret `web-basic-auth` en `default`** (sin uso): eliminado; el script `sync-web-auth.sh` solo lo crea ahora en `monitoring`.
-
 ---
 
 ## Troubleshooting: Kubernetes en LXC
