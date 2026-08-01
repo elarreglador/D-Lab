@@ -1230,13 +1230,19 @@ Un cluster expuesto sin controles de acceso es vulnerable. RBAC restringe qué p
 - [x] Configurar RBAC
   - Crear ClusterRoles: `developer`, `readonly`, `namespace-admin`
   - Crear ClusterRoleBindings: `readonly-binding` (grupo `system:readonly`), `developer-binding` (grupo `system:developers`)
-- [ ] Implementar NetworkPolicies
+- [x] Implementar NetworkPolicies
   - **¿Qué son?**: Aíslan tráfico entre pods. Por defecto todo pod puede hablar con cualquier otro pod. Con NetworkPolicies defines reglas como "el pod A solo acepta tráfico del pod B en el puerto 8080".
   - **Problema**: Flannel (nuestro CNI) **no soporta** NetworkPolicies. Solo gestiona la red overlay (IPs y rutas), no tiene motor de políticas para filtrar tráfico.
-  - **Soluciones**:
-    1. **Calico policy-only**: se instala junto a Flannel, añade el motor de políticas sin reemplazar la red. Requiere ajustar Flannel para evitar conflictos de iptables.
-    2. **Cilium**: reemplazaría Flannel completamente (red + políticas integradas). Más moderno (eBPF) pero requiere migrar el CNI con downtime.
-  - **Estado**: Pendiente de evaluar impacto e implementar una de las dos opciones.
+  - **Solución elegida**: **Calico policy-only** (v3.32.1), se instala junto a Flannel (sigue como CNI de red) y añade el motor de políticas sin reemplazar el overlay. Manifest canónico en `files/calico-policy-only.yaml`.
+  - **Implementación (2026-08-01)**:
+    - Calico instalado con `policy.type=k8s`: las NetworkPolicies se aplican desde el arranque del CNI. `calico-node` corre en los 4 nodos (DaemonSet 4/4).
+    - **Fix RBAC del manifest upstream**: el ClusterRole `calico-cni-plugin` de v3.32.1 no incluye `get clusterinformations`, con lo que el plugin CNI falla al crear sandboxes (`FailedCreatePodSandBox`). Se añadió la regla (ya incorporada en `files/calico-policy-only.yaml`).
+    - **Validación de enforcement**: prueba con 3 pods en un namespace aislado — con una policy "solo beta accede a alpha", `gamma → alpha` quedó bloqueado y `beta → alpha` conectó.
+  - **Políticas de producción** (manifiestos en `files/networkpolicies/`):
+    - `landing-allow-ingress-nginx` (default, `app=landing`): ingress solo desde pods `ingress-nginx` (puerto 80) + egress solo a DNS (kube-dns 53/tcp+udp). Verificado: `https://elarreglador.eu/` → 200; un pod ajeno no alcanza landing ni por PodIP ni por ClusterIP.
+    - `coredns-allow-dns` (kube-system, `k8s-app=kube-dns`): ingress desde todos los pods en 53/tcp+udp; egress sin restringir (coredns debe llegar al API Server y al upstream). DNS cluster-verificado.
+  - **Notas**: las políticas k8s no gobiernan tráfico originado por el host (kubelet/healthchecks/probes); Calico solo refuerza tráfico pod-a-pod. El monitoreo no se ve afectado (kubelet targets up en los 4 nodos; los down son el ruido ya documentado de etcd/scheduler/controller-manager/kube-proxy).
+  - **Consolidación del IPAM (2026-08-01)**: al instalar el CNI de Calico convivieron **dos stores host-local** en el mismo subnet de pod: el de flannel (`/var/lib/cni/networks/cbr0`) para los pods preexistentes y el de Calico (`/var/lib/cni/networks/k8s-pod-network`) para los nuevos. Este "split-brain" de IPAM permite asignar la **misma IP a dos pods** y deja entradas ARP stale en `cni0`, causando conectividad intermitente al API Server (10.96.0.1) en pods nuevos — fue la causa del CrashLoopBackOff del provisioner NFS (`dial tcp 10.96.0.1:443: i/o timeout`). **Resolución**: se reiniciaron todos los workloads con IP de pod (rollouts; los PDBs no bloquean `rollout restart`, solo evictions) para migrarlos al IPAM de Calico, y se limpiaron los restos de `cbr0`. Estado final: un único IPAM (Calico) en los 4 nodos, `calico-kube-controllers` incluido.
 - [x] Configurar Pod Security Standards (PSS)
   - `kube-system`, `kube-flannel`: privileged
   - `default`, `nfs-storage`: baseline con warn restricted
@@ -1637,7 +1643,7 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
 
 **Pod Disruption Budgets (2026-08-01)**: aplicados 6 PDBs con `minAvailable: 1` sobre los workloads críticos (manifiestos en `files/pdbs/`): `coredns` y `landing` (2 réplicas → permiten 1 disruption), `ingress-nginx-controller`, `prometheus`, `grafana` y `alertmanager` (1 réplica → `ALLOWED DISRUPTIONS=0`, la eviction queda bloqueada). **Caveat**: un PDB `minAvailable: 1` sobre un workload de réplica única hace que `kubectl drain` se bloquee; para mantenimiento de nodo hay que escalar temporalmente o pausar el PDB. Los PDBs protegen solo contra disrupciones *voluntarias* (drains/upgrades), no contra fallos involuntarios de host. No aplican a static pods (etcd) ni aportan a DaemonSets (flannel, kube-proxy, node-exporter) ni a workloads de baja criticidad (cert-manager, operator, kube-state-metrics, provisioner).
 
-**Disaster Recovery (2026-08-01)**: backups de etcd redundantes en **ambos** control-planes (`/usr/local/bin/backup-etcd.sh`, idéntico en los dos, copia canónica en `files/backup-etcd.sh`). Usa `crictl exec` sobre el pod etcd **local** (no depende del API Server → funciona aunque el peer esté caído, cerrando el hueco de backups de julio). Cada master guarda su snapshot en `/backup/etcd/` (rotación 30) y la envía por SSH al peer — con 2 copias por snapshot en nodos distintos. RPO=24 h, RTO≈15-30 min. Sin copia offsite (decisión del señor). Procedimientos en [incidentes/dr-restore.md](./incidentes/dr-restore.md).
+**Disaster Recovery (2026-08-01)**: backups de etcd redundantes en **ambos** control-planes (`/usr/local/bin/backup-etcd.sh`, idéntico en los dos, copia canónica en `files/backup-etcd.sh`). Usa `crictl exec` sobre el pod etcd **local** (no depende del API Server → funciona aunque el peer esté caído, cerrando el hueco de backups de julio). Cada master guarda su snapshot en `/backup/etcd/` (rotación 30) y la envía por SSH al peer — con 2 copias por snapshot en nodos distintos. RPO=24 h, RTO≈15-30 min. Sin copia offsite (decisión del señor). Procedimientos en [incidentes/dr-restore.md](./incidentes/dr-restore.md). **Pendiente (2026-08-02)**: verificar la primera ejecución automática del cron (02:00) y que `/var/log/etcd-backup.log` se genera en ambos masters (instalado el 2026-08-01 tras la hora del cron, aún no ha disparado).
 
 **Nota técnica**: etcd con 2 miembros es funcional pero no tolera fallos de un control-plane (pierde quorum). Para HA real se necesita un tercer miembro (D3 o miembro externo).
 
@@ -1777,6 +1783,7 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - Pod Security Standards: namespaces etiquetados (privileged/baseline)
   - Auditoría API Server: policy + logs en ambos masters
   - Backups etcd: script diario + rotación a `/backup/etcd/`
+  - NetworkPolicies: motor Calico policy-only (v3.32.1) junto a Flannel + políticas `landing-allow-ingress-nginx` y `coredns-allow-dns` (manifiestos en `files/networkpolicies/`, engine en `files/calico-policy-only.yaml`)
 
 - [x] **Fase 13: Pod Disruption Budgets**:
   - 6 PDBs `minAvailable: 1` (coredns, landing, ingress-nginx-controller, prometheus, grafana, alertmanager)
