@@ -11,11 +11,6 @@ Proyecto de virtualización y orquestación de contenedores usando LXC (Linux Co
 - [Tecnologías](#tecnologías)
 - [Documentación Técnica](#documentación-técnica)
 - [Guía de Instalación](#guía-de-instalación)
-- [Fase 10.1: Exposición Pública de Servicios](#fase-101--exposición-pública-de-servicios)
-- [Fase 11: Nginx Ingress Controller](#fase-11--nginx-ingress-controller)
-- [Fase 12: Monitoreo y Observabilidad](#fase-12--monitoreo-y-observabilidad)
-- [Clave única de acceso web](#clave-única-de-acceso-web)
-- [Web pública (landing)](#web-pública-landing)
 - [Estado del Proyecto](#estado-del-proyecto)
 
 ---
@@ -133,7 +128,7 @@ Máquina virtual en IONOS para acceso externo al cluster:
 | Componente | Especificación |
 |-----------|---------------|
 | **CPU** | 1 vCPU Intel Xeon (Skylake, IBRS) |
-| **RAM** | 512 MiB |
+| **RAM** | 394 MiB |
 | **Almacenamiento** | 8.6 GB root (vda1) + 2 GB swap |
 | **Red** | VirtIO NIC (ens6) - 82.223.50.169/32 |
 | **SO** | Ubuntu Server 26.04 LTS |
@@ -1012,7 +1007,7 @@ Tras la redistribución de workers y renombrado de contenedores (k8s-worker-1 �
 | `mkdir: Bad message` en `/mnt/data` | Filesystem ext4 corrupto en D2 tras escrituras previas | `mkfs.ext4 -F /dev/sda1` (no había datos importantes) |
 | NFS-Ganesha: `No export entries found` y `Incorrect or missing parameters for export` | El parámetro `volume_name` no es válido en FSAL GLUSTER; debe usarse `volume` | Cambiar `volume_name = "vol-storage"` → `volume = "vol-storage"` en `/etc/ganesha/ganesha.conf` |
 | NFS mount falla con `mount system call failed` | NFSv4 requiere Kerberos en NFS-Ganesha sin configuración adicional | Forzar NFSv3 con `mountOptions: {nfsvers=3}` en el Helm chart del provisioner |
-| D2 sin acceso a kubectl tras failover | API Server solo corre en D1; D2 no tiene kubeconfig configurado | Con HA multi-master (k8s-master-2 en D2) el API Server sigue disponible aunque falle D1. Los pods existentes continúan funcionando y accediendo al NFS sin interrupción. |
+| D2 sin acceso a kubectl tras failover | API Server solo corre en D1; D2 no tiene kubeconfig configurado | Con etcd de **2 miembros** (quorum 2/2), la caída de D1 deja al cluster **sin quorum** (ver [Fase 13](#fase-13--resiliencia-y-alta-disponibilidad)): el API Server de k8s-master-2 no opera hasta recuperar D1. Lo que sí perdura es el **servicio NFS/GlusterFS** vía el worker vivo (replica 2 + VIP), por lo que los datos quedan intactos al recuperar el nodo. |
 | Mismo UUID GlusterFS en ambos workers tras clone | k8s-worker-1 fue clonado de k8s-worker-2, heredando `/var/lib/glusterd/*` | `rm -rf /var/lib/glusterd/*` y reiniciar glusterd en cada worker para regenerar UUID único |
 | GlusterFS peers apuntan a IP incorrecta tras reubicar contenedores | k8s-worker-1 renombrado y movido a D1 (192.168.1.31) pero peer/brick seguía referenciando 192.168.1.22 | Reconstruir GlusterFS desde cero: stop/delete volume, detach peers, reset workers, recreate con IPs correctas |
 
@@ -1469,7 +1464,7 @@ node-exporter nativo en D1/D2 (apt) ── métricas de los hosts físicos (OS)
 ```
 
 **Decisiones de diseño**:
-- **Almacenamiento efímero** (`emptyDir`) para Prometheus y Grafana: la TSDB de Prometheus sobre GlusterFS/NFS no es fiable (el primer intento con PVC NFS dejó `prometheus-0` sin poder arrancar la TSDB). La configuración vive en ConfigMaps/Secrets, así que se pierde solo el histórico. AlertManager sí conserva su PVC NFS (funciona correctamente).
+- **Almacenamiento efímero** (`emptyDir`) para Prometheus, Grafana **y AlertManager**: la TSDB de Prometheus sobre GlusterFS/NFS no es fiable (el primer intento con PVC NFS dejó `prometheus-0` sin poder arrancar la TSDB). No existe ningún PVC de monitoreo (verificado 2026-08-01: los StatefulSets usan `emptyDir`). La configuración vive en ConfigMaps/Secrets, así que se pierde solo el histórico.
 - **Recursos ajustados**: el primer despliegue hizo OOM a Grafana (límite 256Mi → `exitCode 137`). Se subió a 512Mi/200Mi. DV0 con 1 vCPU no soportaría este stack; por eso corre en los nodos del cluster.
 - **Node-exporter host en ambos modos**: DaemonSet para los 4 nodos K8s + paquete nativo `prometheus-node-exporter` en D1/D2 (métricas del OS físico del host, no del container).
 - **Alertas sin notificación**: solo se ven en la UI de AlertManager (sin receiver). El usuario decidió no configurar envíos externos en esta fase.
@@ -1488,7 +1483,7 @@ Los containers LXD usan red **macvlan** (`macvlan0`), que por diseño impide que
      --namespace monitoring --create-namespace \
      --values /root/values-monitoring.yaml --wait --timeout 300s
    ```
-   Values destacados: Prometheus/Grafana efímeros, Grafana `requests 200Mi/limits 512Mi`, `adminPassword` generada, AlertManager con PVC NFS.
+   Values destacados: Prometheus/Grafana/AlertManager efímeros (`emptyDir`), Grafana `requests 200Mi/limits 512Mi`, `adminPassword` generada.
 
    **Incidencias resueltas**: (1) Grafana OOM con 256Mi → límite a 512Mi. (2) Prometheus sin arrancar la TSDB sobre PVC NFS → storage efímero. (3) `helm upgrade --wait` en estado `failed` → desinstalar y reinstalar limpio con los values corregidos (causa raíz: el values subido al container era una versión antigua, el `lxc file push` no se había repetido tras editar el local).
 
@@ -1519,7 +1514,8 @@ curl -s http://127.0.0.1:9090/api/v1/targets   # (vía port-forward)
 
 # Datos de hosts con label correcta
 curl -s 'http://127.0.0.1:9090/api/v1/query?query=node_uname_info'
-# d1 → D1 (192.168.1.12:19100), d2 → D2 (192.168.1.12:9100)
+# host=d1 → D1 scrapeado vía relay socat de D2 (192.168.1.12:19100 → D1:9100)
+# host=d2 → D2 scrapeado directo (192.168.1.12:9100)
 ```
 
 **Credenciales** (guardar en backup local):
@@ -1541,13 +1537,13 @@ curl -s 'http://127.0.0.1:9090/api/v1/query?query=node_uname_info'
 
 **Fichero canónico y sincronización**:
 - Fuente única: `info_sensible/htpasswd-web` (gitignored, formato `$apr1$`).
-- Script `scripts/sync-web-auth.sh`: lee el fichero local y crea/actualiza el Secret `web-basic-auth` en los namespaces listados (`default`, `monitoring`). Genera el YAML localmente y lo aplica por stdin vía `ssh server` (el hash nunca se escribe en disco de DV0).
+- Script `scripts/sync-web-auth.sh`: lee el fichero local y crea/actualiza el Secret `web-basic-auth` en los namespaces listados (`monitoring` por defecto). Genera el YAML localmente y lo aplica por stdin vía `ssh server` (el hash nunca se escribe en disco de DV0).
   ```bash
-  ./scripts/sync-web-auth.sh            # namespaces por defecto
-  WEB_AUTH_NAMESPACES="default monitoring" ./scripts/sync-web-auth.sh
+  ./scripts/sync-web-auth.sh            # namespaces por defecto (monitoring)
+  WEB_AUTH_NAMESPACES="monitoring" ./scripts/sync-web-auth.sh
   ```
 
-**Anotaciones necesarias en cada Ingress público** (idénticas en todos):
+**Anotaciones necesarias en cada Ingress público** (el valor de `auth-realm` es libre; el resto es idéntico en todos):
 ```yaml
 nginx.ingress.kubernetes.io/auth-type: basic
 nginx.ingress.kubernetes.io/auth-secret: web-basic-auth
@@ -1595,7 +1591,7 @@ curl -s -o /dev/null -w 'grafana con-auth=%{http_code}\n' -u elarreglador:CLAVE 
 ```bash
 ./scripts/deploy-landing.sh
 ```
-El script construye el ConfigMap `landing-html` desde `files/landing/` (claves planas: `index.html`, `styles.css`, `*.svg`, `*.webp` — ConfigMap no admite `/` en las claves) y aplica ConfigMap + Deployment/Service + Ingress vía `ssh server`, reiniciando los pods para forzar la carga del contenido.
+El script construye el ConfigMap `landing-html` desde `files/landing/` (claves planas: `index.html`, `styles.css`, `*.svg`, `*.webp` — ConfigMap no admite `/` en las claves). Todas las claves se escriben en `binaryData` (base64), incluidos los ficheros de texto, por simplicidad del generador; los pods las montan igualmente como ficheros. Aplica ConfigMap + Deployment/Service + Ingress vía `ssh server`, reiniciando los pods para forzar la carga del contenido.
 
 **Verificación**:
 ```bash
@@ -1629,6 +1625,8 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
 - Por eso se hacen backups diarios (Fase 10).
 
 **En nuestro cluster**: Modo **stacked** — cada control-plane ejecuta su propio etcd (1 miembro por master). Con 2 miembros, si uno falla el cluster etcd pierde quorum (necesita mayoría = 2 de 2). Para HA real se necesita un tercer miembro.
+
+**Nota sobre roles (verificado 2026-08-01)**: `k8s-master-1` ejecuta los componentes de control-plane (apiserver, etcd, scheduler, controller-manager) pero **no tiene** la etiqueta `node-role.kubernetes.io/control-plane` ni el taint `NoSchedule`; solo `k8s-master-2` los conserva. Consecuentemente, el scheduler puede ubicar pods de usuario en `k8s-master-1`. Se documenta el estado real por decisión del señor (sin cambios en el cluster).
 
 - [x] Agregar segundo control-plane (k8s-master-2 en D2)
 - [x] etcd replicado (stacked, 2 miembros)
@@ -1747,11 +1745,10 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - Verificado: targets up (host-node ×2, cert-manager), HTTPS 401/200, cert válido, métricas `node_uname_info` con labels `host=d1`/`host=d2`
   - Detalle en [README.md#fase-12--monitoreo-y-observabilidad](./README.md#fase-12--monitoreo-y-observabilidad)
 
-### En Progreso 🔄
-
 - [x] Fase 8: Almacenamiento Persistente (GlusterFS + NFS-Ganesha)
 - [x] Fase 9: Despliegues de Prueba
 - [x] **Fase 2.4**: DV0 como cliente remoto LXC con remote `d2` por defecto
+
 - [x] **HA Multi-Master (Fase 13 extendida)**:
   - Segundo control-plane k8s-master-2 en D2 (192.168.1.22)
   - etcd cluster de 2 miembros (stacked, replicado)
@@ -1776,6 +1773,12 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - Auditoría API Server: policy + logs en ambos masters
   - Backups etcd: script diario + rotación a `/backup/etcd/`
 
+### En Progreso 🔄
+
+- [ ] **Fase 13**: tercer nodo de control-plane (D3) para quorum etcd (3 miembros mínimo)
+- [ ] **Fase 13**: Pod Disruption Budgets
+- [ ] **Fase 13**: estrategia de disaster recovery
+
 ### Pendiente ⏳
 
 - **RAM**: 8GB por nodo (mínimo alcanzado, ideal 16GB)
@@ -1796,6 +1799,15 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
 - **GlusterFS con 2 nodos y replica 2**: El volumen replica 2 sobrevive la caída de un nodo (el otro sigue sirviendo). Sin embargo, ningún nodo puede caer permanentemente sin dejar el volumen degradado. Al añadir D3 se migrará a disperse (erasure code) para ~1TB usable con tolerancia a 1 fallo.
 
 - **etcd con 2 miembros**: El cluster etcd tolera la caída de un control-plane pero pierde quorum (necesita mayoría = 2 de 2). Con 3 miembros toleraría 1 fallo. Alternativa: añadir un miembro etcd externo o un tercer nodo D3.
+
+### Limpieza de restos (2026-08-01)
+
+Restos del historial del cluster, **ya limpiados** el 2026-08-01:
+
+- **Namespace `rook-ceph` en `Terminating`** (desde 2026-07-09): retiraba recursos con finalizers (`cephcluster`, `clientprofile`, configmap `rook-ceph-mon-endpoints`, secret `rook-ceph-mon`) bloqueados por `ceph.rook.io/disaster-protection`, `cephcluster.ceph.rook.io` y `csi.ceph.com/cleanup`. Se parchearon los finalizers a `[]`, se eliminaron los recursos y el namespace. Además se retiraron las **15 CRDs** de Rook/Ceph (`*.rook.io`, `*.csi.ceph.io`).
+- **PV `pvc-150b895b-ae83-404e-a869-c5e37aa2a49e` Released** (storageClass `longhorn`, reclaim Delete): resto de la prueba Longhorn, eliminado.
+- **PVC `test-nfs-pvc`** (Bound, 100Mi, `nfs-storage`): PVC de pruebas del provisioner, eliminado (el provisioner retiró su subdirectorio y el PV por reclaim Delete).
+- **Secret `web-basic-auth` en `default`** (sin uso): eliminado; el script `sync-web-auth.sh` solo lo crea ahora en `monitoring`.
 
 ---
 

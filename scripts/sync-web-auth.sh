@@ -3,7 +3,7 @@ set -euo pipefail
 
 HTPASSWD_FILE="${1:-info_sensible/htpasswd-web}"
 KUBECTL_HOST="${KUBECTL_HOST:-server}"
-NAMESPACES="${WEB_AUTH_NAMESPACES:-default monitoring}"
+NAMESPACES="${WEB_AUTH_NAMESPACES:-monitoring}"
 SECRET=web-basic-auth
 
 if [[ ! -f "$HTPASSWD_FILE" ]]; then
