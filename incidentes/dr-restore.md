@@ -17,7 +17,7 @@
 - **Cron**: `0 2 * * * root /usr/local/bin/backup-etcd.sh >> /var/log/etcd-backup.log 2>&1` (`/etc/cron.d/etcd-backup` en cada master).
 - **Mecánica**: usa `crictl exec` para ejecutar `etcdctl snapshot save` dentro del **pod etcd local**. Al no pasar por el API Server, funciona aunque el peer esté caído (sin quorum) — cierra el hueco que dejaba el enfoque `kubectl exec`.
 - **Doble copia**: cada master guarda su snapshot en `/backup/etcd/` (rotación: últimas 30) **y además lo envía por SSH al peer** (`root@192.168.1.21` / `root@192.168.1.22`, claves ed25519 configuradas en `/root/.ssh/`). Como etcd está replicado en tiempo real (Raft), las snapshots de ambos miembros son equivalentes: cualquier copia sirve para restaurar.
-- **Dependencias**: `crictl` instalado en ambos masters (v1.36.0 en k8s-master-1; ya presente en k8s-master-2) y `/etc/crictl.yaml` apuntando a containerd.
+- **Dependencias**: `crictl` **v1.36.0 en ambos masters** (alineado el 2026-08-01) y `/etc/crictl.yaml` apuntando a containerd.
 
 ## Verificación del backup
 
@@ -74,4 +74,5 @@ Ejemplo: se pierde el disco/contenedor de k8s-master-1.
 - **RPO real**: la doble copia no reduce el RPO de 24 h (una snapshot diaria); sí elimina el riesgo de perder la única copia junto con el nodo.
 - **Backup manual de otros datos**: `info_sensible/` (claves WG/SSH, htpasswd) y `values-monitoring.yaml` no están en el repo; deben respaldarse aparte (ver backup local del señor).
 - **Drill recomendado**: ejecutar periódicamente `etcdctl snapshot status` y, de forma puntual, una restauración de prueba en un etcd temporal para validar que el backup es restaurable.
-- **Pendiente (2026-08-02)**: la primera ejecución automática del cron (02:00) no se ha producido aún (el script se instaló el 2026-08-01 ~11:52, tras la hora del cron). Verificar que el 2026-08-02 existe `/var/log/etcd-backup.log` en **ambos** masters y que cada uno generó su snapshot local + copia al peer. También alinear el dueño del script en master-2 (`ubuntu:ubuntu` → `root:root`, igual que master-1) y anotar que crictl en master-2 es v1.31.0 (funcional; solo CLI de containerd).
+- **Pendiente (2026-08-02)**: la primera ejecución automática del cron (02:00) no se ha producido aún (el script se instaló el 2026-08-01 ~11:52, tras la hora del cron). Verificar que el 2026-08-02 existe `/var/log/etcd-backup.log` en **ambos** masters y que cada uno generó su snapshot local + copia al peer.
+- **crictl alineado (2026-08-01)**: ambos masters con crictl **v1.36.0** (master-2 actualizado; backup del binario anterior en `/usr/local/bin/crictl.1.31.0.bak`, verificado por sha256 contra el asset oficial). El dueño del script `backup-etcd.sh` en master-2 ya es `root:root` (igual que master-1).
