@@ -14,6 +14,8 @@ Proyecto de virtualización y orquestación de contenedores usando LXC (Linux Co
 - [Fase 10.1: Exposición Pública de Servicios](#fase-101--exposición-pública-de-servicios)
 - [Fase 11: Nginx Ingress Controller](#fase-11--nginx-ingress-controller)
 - [Fase 12: Monitoreo y Observabilidad](#fase-12--monitoreo-y-observabilidad)
+- [Clave única de acceso web](#clave-única-de-acceso-web)
+- [Web pública (landing)](#web-pública-landing)
 - [Estado del Proyecto](#estado-del-proyecto)
 
 ---
@@ -1364,7 +1366,7 @@ tcp:127.0.0.1:30080/30443 (k8s-worker-1, NodePorts ingress-nginx)
               ↓
 ingress-nginx (Ingress resources por hostname)
               ↓ TLS (cert-manager, Let's Encrypt)
-Service `test-web` → pods nginx
+Service `landing` → pods nginx (web estática, [Web pública](#web-pública-landing))
 ```
 
 **Por qué este diseño**: DV0 tiene 1 vCPU y 394MB RAM, por lo que terminar TLS allí es costoso. Se optó por **passthrough total**: DV0 (módulo `stream`) reenvía los bytes TCP sin inspeccionarlos y el TLS lo termina ingress-nginx dentro del cluster. DV0 no puede alcanzar las IPs LAN de los containers (ruteo asimétrico), por eso los proxy apuntan a la IP WG del host D1 (`10.8.0.11`).
@@ -1422,26 +1424,25 @@ Service `test-web` → pods nginx
      --namespace cert-manager --create-namespace \
      --version v1.17.2 --set crds.enabled=true --wait --timeout 300s
    ```
-   Crear ClusterIssuer HTTP-01 (solver `ingress: { class: nginx }`) y Certificate para `elarreglador.eu`, `www.elarreglador.eu` y `test.elarreglador.eu` (secret TLS `elarreglador-eu-tls`).
+   Crear ClusterIssuer HTTP-01 (solver `ingress: { class: nginx }`) y Certificate para `elarreglador.eu` y `www.elarreglador.eu` (secret TLS `elarreglador-eu-tls`; el SAN de `test.elarreglador.eu` se retiró el 2026-08-01 al quedar sin servicio).
 
    **Nota**: HTTP-01 no emite wildcards (solo DNS-01 con acceso a la API del DNS). Como los subdominios son fijos, HTTP-01 es suficiente.
 
-5. **Crear Ingress resource** (`elarreglador-eu`, `ingressClassName: nginx`) con los tres hostnames → backend `test-web:80` y `nginx.ingress.kubernetes.io/force-ssl-redirect: "true"`.
+5. **Crear Ingress resource** `elarreglador-landing` (`ingressClassName: nginx`) con los hostnames `elarreglador.eu` y `www.elarreglador.eu` → backend `landing:80` y `force-ssl-redirect: "true"` (sin autenticación; ver [Web pública (landing)](#web-pública-landing)). El antiguo Ingress `elarreglador-eu` (3 hostnames → `test-web`) fue retirado el 2026-08-01 junto con el servicio de prueba.
 
 **Verificación**:
 ```bash
-curl -sk https://test.elarreglador.eu   # → 200
-curl -sk https://www.elarreglador.eu    # → 200
-curl -sk https://elarreglador.eu        # → 200
-curl -s  http://test.elarreglador.eu    # → 308 → https://test.elarreglador.eu/
-echo | openssl s_client -connect test.elarreglador.eu:443 -servername test.elarreglador.eu \
+curl -s -o /dev/null -w '%{http_code}\n' https://elarreglador.eu   # → 200 (sin credenciales)
+curl -s -o /dev/null -w '%{http_code}\n' https://www.elarreglador.eu # → 200
+curl -sk https://test.elarreglador.eu    # → 404 (host retirado)
+echo | openssl s_client -connect elarreglador.eu:443 -servername elarreglador.eu \
   | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
-# subject=CN = elarreglador.eu, issuer=Let's Encrypt, SANs: elarreglador.eu, test.*, www.*
+# subject=CN = elarreglador.eu, issuer=Let's Encrypt, SANs: elarreglador.eu, www.*
 ```
 
 **Notas**:
 - El certificado antiguo de DV0 (www + apex, certbot) fue retirado (`certbot delete --cert-name www.elarreglador.eu`) al quedar sin uso tras el passthrough.
-- El LXC proxy device `proxy31113` (Fase 10.1) fue retirado; `test-web` conserva su NodePort 31113 interno pero ya no se expone directamente.
+- `test-web` (nginx de prueba de Fase 10.1) y su Ingress fueron retirados el 2026-08-01; su NodePort 31113 interno se eliminó junto al deployment y el service.
 - La renovación del certificado la gestiona cert-manager automáticamente (HTTP-01 revalida ~30 días antes de expirar).
 
 **Prerequisitos**: Fase 10.1 completada, WireGuard operativo, wildcard DNS en Spaceship  
@@ -1498,18 +1499,18 @@ Los containers LXD usan red **macvlan** (`macvlan0`), que por diseño impide que
    Durante este paso se detectó que **systemd-resolved de D1/D2 no resolvía** (los intentos de apt quedaban colgados). El stub `127.0.0.53` no respondía aunque los upstream (1.1.1.1/8.8.8.8) sí resolvían por `nslookup` directo. Solución de laboratorio: `resolv.conf` estático con `nameserver 1.1.1.1`/`8.8.8.8`.
    Manifiestos: Service headless `host-node` (ports 9100/19100) + Endpoints manuales + ServiceMonitor `host-node` (con label `release: kube-prometheus-stack`, requerida por el `serviceMonitorSelector` de Prometheus).
 
-3. **Grafana público con basic auth**:
-   - Secret `grafana-basic-auth` (htpasswd `$apr1$`, usuario `admin`, password generada).
+3. **Grafana público con clave de acceso web** (ver [Clave única de acceso web](#clave-única-de-acceso-web)):
    - Ingress `grafana` con `auth-type: basic`, `force-ssl-redirect`, TLS → `grafana.elarreglador.eu`.
    - Certificate `grafana-elarreglador-eu` (cert-manager, HTTP-01) en namespace `monitoring` — los secrets TLS deben vivir en el mismo namespace que el Ingress, por eso no se reutilizó el secret `elarreglador-eu-tls` (que está en `default`).
+   - Grafana configurado con **anonymous Viewer** (`grafana.ini` → `auth.anonymous`): la clave compartida es la única barrera, sin login interno.
 
 4. **ServiceMonitor cert-manager** (Service `cert-manager:9402` en namespace `cert-manager`) + **PrometheusRule `alertas-personalizadas`** (grupo `host-alertas`): `HostDown` (hosts), `ClusterNodeNotReady`, `DiskPressureHost` (>85%), `CertificateExpiring` (<30 días).
 
 **Verificación**:
 ```bash
-# Public path: basic auth 401 sin credenciales, 200 con ellas
-curl -s -o /dev/null -w '%{http_code}\n' https://grafana.elarreglador.eu/          # 401
-curl -s -o /dev/null -w '%{http_code}\n' -u admin:PASS https://grafana.elarreglador.eu/login  # 200
+# Public path: clave de acceso web 401 sin credenciales, 200 con ellas
+curl -s -o /dev/null -w '%{http_code}\n' https://grafana.elarreglador.eu/   # 401
+curl -s -o /dev/null -w '%{http_code}\n' -u elarreglador:CLAVE https://grafana.elarreglador.eu/  # 200 (carga sin login interno)
 echo | openssl s_client -connect grafana.elarreglador.eu:443 -servername grafana.elarreglador.eu \
   | openssl x509 -noout -subject -issuer -dates   # CN=grafana.elarreglador.eu, Let's Encrypt
 
@@ -1522,8 +1523,8 @@ curl -s 'http://127.0.0.1:9090/api/v1/query?query=node_uname_info'
 ```
 
 **Credenciales** (guardar en backup local):
-- Grafana admin: `admin` / password en `values-monitoring.yaml` (`adminPassword`).
-- Basic auth nginx (Ingress): `admin` / password generada en Secret `grafana-basic-auth`.
+- Clave única de acceso web (todos los servicios): usuario `elarreglador` / clave canónica en `info_sensible/htpasswd-web` (gitignored). Ver [Clave única de acceso web](#clave-única-de-acceso-web).
+- Grafana admin (mantenimiento): `admin` / password en `values-monitoring.yaml` (`adminPassword`).
 
 **Notas**:
 - Las alertas por defecto de kube-prometheus-stack `TargetDown`, `etcdMembersDown` e `etcdInsufficientMembers` aparecen **firing** en AlertManager porque los targets `kube-etcd`, `kube-scheduler`, `kube-controller-manager` y `kube-proxy` no exponen métricas en los puertos por defecto en este cluster LXC. Es ruido esperable en esta configuración; la cadena principal (kubelet, apiserver, coredns, node-exporter, hosts) está **up**.
@@ -1531,6 +1532,81 @@ curl -s 'http://127.0.0.1:9090/api/v1/query?query=node_uname_info'
 
 **Prerequisitos**: Fase 11 completada, WireGuard operativo, DNS wildcard en Spaceship  
 **Duración Estimada**: 3-4 horas
+
+### Clave única de acceso web
+
+**Objetivo**: que cualquier servicio web expuesto públicamente pida siempre la misma clave de acceso, gestionada desde un único sitio (equivalente al `auth_basic_user_file` de un virtual server nginx clásico).
+
+**Cómo funciona**: ingress-nginx exige HTTP Basic Auth a nivel de Ingress mediante anotaciones. La clave (usuario `elarreglador`) se guarda como un único fichero htpasswd canónico y se replica como Secret `web-basic-auth` en cada namespace que tenga un Ingress público. Todos los servicios usan el mismo Secret.
+
+**Fichero canónico y sincronización**:
+- Fuente única: `info_sensible/htpasswd-web` (gitignored, formato `$apr1$`).
+- Script `scripts/sync-web-auth.sh`: lee el fichero local y crea/actualiza el Secret `web-basic-auth` en los namespaces listados (`default`, `monitoring`). Genera el YAML localmente y lo aplica por stdin vía `ssh server` (el hash nunca se escribe en disco de DV0).
+  ```bash
+  ./scripts/sync-web-auth.sh            # namespaces por defecto
+  WEB_AUTH_NAMESPACES="default monitoring" ./scripts/sync-web-auth.sh
+  ```
+
+**Anotaciones necesarias en cada Ingress público** (idénticas en todos):
+```yaml
+nginx.ingress.kubernetes.io/auth-type: basic
+nginx.ingress.kubernetes.io/auth-secret: web-basic-auth
+nginx.ingress.kubernetes.io/auth-realm: "Elarreglador - autenticacion requerida"
+nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+```
+
+**Proteger un nuevo servicio**: (1) ejecutar el script con su namespace en la lista, (2) añadir las 4 anotaciones a su Ingress, (3) comprobar 401/200. Nada más.
+
+**Rotar la clave** (todos los servicios a la vez):
+```bash
+htpasswd -nbB elarreglador '<NUEVA_CLAVE>' > info_sensible/htpasswd-web
+./scripts/sync-web-auth.sh
+```
+
+**Verificación actual** (hostnames públicos protegidos):
+```bash
+curl -s -o /dev/null -w 'grafana sin-auth=%{http_code}\n' https://grafana.elarreglador.eu/
+curl -s -o /dev/null -w 'grafana con-auth=%{http_code}\n' -u elarreglador:CLAVE https://grafana.elarreglador.eu/
+# 401 sin credenciales, 200 con ellas
+```
+
+**Excepción**: `elarreglador.eu` y `www.elarreglador.eu` están **fuera** de esta protección: sirven la landing pública (ver [Web pública (landing)](#web-pública-landing)) y responden 200 sin credenciales.
+
+**Nota de seguridad**: la clave sudo/LXD se reutiliza como clave web por decisión del señor (una sola clave para todo). Esto amplía su superficie de exposición (viaja en cada petición, cifrada por TLS). Mitigado con: `force-ssl-redirect`, hash `$apr1$` en Secret, fichero canónico gitignored y rotación centralizada. Si algún día se separan, solo hay que rotar la web por el procedimiento anterior.
+
+### Web pública (landing)
+
+**Objetivo**: exponer `elarreglador.eu` (y `www.elarreglador.eu`) como página de presentación **pública, sin credenciales**, alojada dentro del cluster en pods Kubernetes.
+
+**Dónde se aloja**:
+- **Fuente de verdad**: repositorio, `files/landing/` (`index.html`, `styles.css`, `*.svg`, `*.webp`).
+- **En el cluster**: un **ConfigMap `landing-html`** (vive en etcd) con todos los ficheros; el Deployment monta ese ConfigMap (solo lectura) en `/usr/share/nginx/html/` de los pods `landing` (nginx:alpine, 2 réplicas). Los pods son efímeros: si caen, el Deployment los recrea y re-montan el contenido desde etcd.
+- **Ruta**: `elarreglador.eu`/`www` → Ingress `elarreglador-landing` → Service `landing` (ClusterIP:80) → pods nginx. Sin anotaciones de auth.
+
+**Características de la página**:
+- Solo **HTML + CSS** (CSS en fichero independiente `styles.css`), **sin JS ni assets externos**; imágenes locales (ficheros `.svg` y `.webp` servidos por el propio pod).
+- **Fotografía generada por IA** (pollinations.ai, optimizada a WebP 800px, ~10 KB): `hero.webp` como foto del hero. Sin info sensible; se trata como el resto de la web. (Las anteriores `iot.webp`/`rack.webp`/`control.webp` se retiraron el 2026-08-01 por decisión del señor.)
+- **Tema heredado del sistema del visitante**: variables CSS con `prefers-color-scheme` (claro/oscuro) y `color-scheme: light dark`; las fotos se atenúan ligeramente en modo oscuro.
+- **Responsive** (grid `auto-fit`, `clamp()` en tipografías, media queries para móvil) y accesible (HTML semántico, `lang="es"`, `alt`, skip-link, `prefers-reduced-motion`).
+- Contenido compacto: presentación con apodo `@elarreglador` (subtítulo enlazado al perfil de GitHub), tecnologías (SRE/IoT/Desarrollo/Herramientas), contacto (GitHub, repositorios, Currículum, correo, LinkedIn, D-Lab) y pie.
+- Cabecera fija (sticky): logo monograma `DM` + nombre en la brand y navegación por anclas; fondo al 96% de opacidad (oscurecida) con blur y borde inferior.
+
+**Desplegar/actualizar** (el contenido viaja por stdin, método probado):
+```bash
+./scripts/deploy-landing.sh
+```
+El script construye el ConfigMap `landing-html` desde `files/landing/` (claves planas: `index.html`, `styles.css`, `*.svg`, `*.webp` — ConfigMap no admite `/` en las claves) y aplica ConfigMap + Deployment/Service + Ingress vía `ssh server`, reiniciando los pods para forzar la carga del contenido.
+
+**Verificación**:
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://elarreglador.eu    # 200 sin credenciales
+curl -s -o /dev/null -w '%{http_code}\n' https://www.elarreglador.eu # 200
+curl -s -o /dev/null -w '%{http_code}\n' https://elarreglador.eu/styles.css  # 200 (assets locales)
+```
+
+**Nota**: la imagen `nginx:alpine` stock requiere root (entrypoint y cachés), por lo que el pod no cumple el perfil PSA `restricted` (solo `warn` en este namespace; `enforce: baseline` sí se cumple). Para `restricted` habría que servir con imagen no-root (p. ej. puerto 8080 + usuario `nginx`), fuera de alcance para una landing estática.
+
+**Límite y fallback**: el ConfigMap no puede superar ~1 MiB. El script `deploy-landing.sh` aborta con un mensaje claro antes de aplicar si se supera (el contenido actual pesa ~25 KB). Si algún día la web creciera más allá del límite, se migra a **imagen nginx custom**: `Dockerfile` (nginx:alpine + `COPY` de `files/landing/`), build en DV0 con docker, importar en cada nodo (`docker save | lxc exec k8s-master-1 -- ctr images import`, idem workers) y `imagePullPolicy: IfNotPresent` en el Deployment.
 
 ---
 
@@ -1652,11 +1728,11 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - LXC proxy devices `proxy30080`/`proxy30443` en k8s-worker-1 (10.8.0.11 → 127.0.0.1)
   - nginx DV0 migrado a módulo `stream` (passthrough total, sin TLS) — retirado sitio HTTP antiguo
   - cert-manager v1.17.2 (helm) + ClusterIssuer HTTP-01 `letsencrypt-http`
-  - Certificate multi-dominio `elarreglador.eu`/`www.*`/`test.*` emitido por Let's Encrypt (secret `elarreglador-eu-tls`, renovación automática)
-  - Ingress resource único enrutando los tres hostnames → `test-web` con `force-ssl-redirect`
+  - Certificate `elarreglador.eu`/`www.*` emitido por Let's Encrypt (secret `elarreglador-eu-tls`, renovación automática; SAN de `test.*` retirado el 2026-08-01)
+  - Ingress `elarreglador-landing` → `landing:80` (web estática pública) con `force-ssl-redirect`; retirados Ingress `elarreglador-eu` y `test-web`
   - DNS wildcard `*.elarreglador.eu` → 82.223.50.169 añadido en Spaceship
-  - Retirados: certificado DV0 (certbot) y LXC proxy device `proxy31113`
-  - Verificado: HTTPS 200 en los tres dominios, HTTP → 308 → HTTPS, SANs correctos
+  - Retirados: certificado DV0 (certbot), LXC proxy device `proxy31113` y `test-web`
+  - Verificado: HTTPS 200 en `elarreglador.eu`/`www.*` sin credenciales, `test.*` → 404, HTTP → HTTPS, SANs correctos
   - Detalle en [README.md#fase-11--nginx-ingress-controller](./README.md#fase-11--nginx-ingress-controller)
 
 - [x] **Fase 12: Monitoreo y Observabilidad**:
@@ -1665,7 +1741,7 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - Recursos ajustados: Grafana 512Mi/200Mi (evita OOM), Prometheus 2Gi/600Mi
   - node-exporter nativo en D1/D2 (`apt`) + Service/Endpoints/ServiceMonitor `host-node` — D1 scrapeado vía relay socat en D2 (:19100) por limitación macvlan container↔host
   - `resolv.conf` estático en D1/D2 (systemd-resolved roto bloqueaba apt)
-  - Grafana público en `https://grafana.elarreglador.eu` con basic auth (Ingress + Secret htpasswd) y Certificate Let's Encrypt dedicado en `monitoring`
+  - Grafana público en `https://grafana.elarreglador.eu` protegido por la clave única de acceso web (anonymous Viewer, sin login interno) y Certificate Let's Encrypt dedicado en `monitoring`
   - ServiceMonitor cert-manager + PrometheusRule `alertas-personalizadas` (HostDown, ClusterNodeNotReady, DiskPressureHost, CertificateExpiring)
   - AlertManager sin receiver (alertas solo UI)
   - Verificado: targets up (host-node ×2, cert-manager), HTTPS 401/200, cert válido, métricas `node_uname_info` con labels `host=d1`/`host=d2`
