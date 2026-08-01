@@ -300,6 +300,23 @@ h1 {
   margin: 0 0 0.9rem;
 }
 
+.card p {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  margin: 0 0 1rem;
+}
+
+.card a {
+  color: var(--accent);
+  font-weight: 550;
+  font-size: 0.92rem;
+  word-break: break-word;
+}
+
+.card a:hover {
+  text-decoration: underline;
+}
+
 .pills {
   display: flex;
   flex-wrap: wrap;
