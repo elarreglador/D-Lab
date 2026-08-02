@@ -41,6 +41,10 @@
 - **Almacenamiento**: efímero (`persistence.enabled: false`). Tras reiniciar el pod se pierden cambios de UI no provisionados.
 - **Recursos**: requests 100m/200Mi, limits 500m/512Mi.
 - **Ojo Grafana 13**: el endpoint `POST /login` espera **JSON** (`Content-Type: application/json`, cuerpo `{"user":"...","password":"..."}`), no form-urlencoded. Afecta a la automatización con curl, no al navegador.
+- **Datos de los paneles**: Grafana **consulta** a Prometheus y AlertManager (no al revés: Prometheus recolecta y almacena; Grafana hace las consultas cuando pinta un panel). Datasources definidos en el ConfigMap `kube-prometheus-stack-grafana-datasource` (montado por el sidecar kiwigrid):
+  - `Prometheus` (default, `access: proxy`): `http://kube-prometheus-stack-prometheus.monitoring:9090/` — cada panel lanza queries PromQL.
+  - `Alertmanager`: `http://kube-prometheus-stack-alertmanager.monitoring:9093/` — para visualizar alertas en paneles.
+  - Ambas son ClusterIP internas (`:9090` y `:9093`), comunicación pod↔pod por la red del cluster; **no** necesitan dominio público.
 
 ## Prometheus
 
@@ -61,12 +65,25 @@
 - **ServiceMonitor cert-manager**: Service `cert-manager:9402` en namespace `cert-manager`.
 - **PrometheusRule `alertas-personalizadas`** (grupo `host-alertas`): `HostDown`, `ClusterNodeNotReady`, `DiskPressureHost` (>85%), `CertificateExpiring` (<30 días).
 
+## Node-RED
+
+- **URL pública**: `https://nodered.elarreglador.eu` (Ingress `nodered` en namespace `pods`).
+- **Imagen**: `nodered/node-red:5.0.4` (Node.js 24), puerto 1880. Deployment 1 réplica en `pods`.
+- **Login propio de Node-RED** (usuario `elarreglador`): definido en `settings.js` (`adminAuth` con hash bcrypt) montado desde el Secret `nodered-settings` (Opaque, gitignored — se genera en despliegue). **Sin** basic-auth web ni anonymous.
+- **Secretos**: el hash bcrypt y el `credentialSecret` (cifrado de credenciales de nodos) se generan en el despliegue y **no** se versionan. Ver `scripts/deploy-nodered.sh`.
+- **Almacenamiento**: PVC `nodered-data` (5Gi, RWO, `nfs-storage`) montado en `/data` (flows, credenciales y contextos persistentes).
+- **Ingress** (`files/nodered/ingress.yaml`): TLS con cert-manager (Certificate `nodered-elarreglador-eu` → secret `nodered-elarreglador-eu-tls`), `force-ssl-redirect: true`. Certificate versionado en `files/nodered/certificate.yaml`.
+- **NetworkPolicy** (`files/nodered/networkpolicy.yaml`): permite tráfico desde ingress-nginx (1880), egress DNS y salida a Internet (para instalar nodos del palette).
+- **Recursos**: requests 100m/256Mi, limits 500m/512Mi.
+- **Despliegue**: `NODERED_PASSWORD=<clave> ./scripts/deploy-nodered.sh` (la clave solo en el entorno; el hash se genera con python3-bcrypt sin escribirla en disco).
+
 ## Exposición pública
 
 | Host | App | Protección |
 |------|-----|-----------|
 | `elarreglador.eu` / `www.elarreglador.eu` | Landing (pública) | ninguna (200 sin credenciales) |
 | `grafana.elarreglador.eu` | Grafana | login de Grafana |
+| `nodered.elarreglador.eu` | Node-RED | login propio de Node-RED |
 | prometheus / alertmanager | — | internos (sin ingress) |
 
 ## PDBs y NetworkPolicies
@@ -78,11 +95,12 @@
 
 - **Alertas firing por diseño**: `TargetDown`, `etcdMembersDown`, `etcdInsufficientMembers` (targets `kube-etcd`/`kube-scheduler`/`kube-controller-manager`/`kube-proxy` no exponen métricas en los puertos por defecto en LXC) y `Watchdog` (centinela). La cadena principal (kubelet, apiserver, coredns, node-exporter, hosts) está **up**.
 - **Credenciales**: nunca en el repo. Grafana admin → `values-monitoring.yaml` en k8s-master-1. Clave web / secretos → `info_sensible/` (gitignored).
-- **Scripts útiles** (`scripts/`): `deploy-landing.sh` (despliegue de la landing), `sync-web-auth.sh` (clave web; hoy **sin namespaces por defecto** — Grafana usa su propio login), `computer_info.sh`.
+- **CNI Calico — tokens de `calico-kubeconfig`**: el token del SA `calico-cni-plugin` usado por el plugin CNI en los 4 nodos (`/etc/cni/net.d/calico-kubeconfig`) **expira** (el emitido por kubeadm el 2026-08-01 caducó a las 24 h y todos los pods nuevos fallaban con `error getting ClusterInformation: ... Unauthorized`). Se fijó creando el Secret `calico-cni-plugin-token` (kube-system, anotación `kubernetes.io/service-account.name`) — sin expiración — y reescribiendo el `token:` de ese kubeconfig en los 4 nodos. Si vuelve a aparecer `FailedCreatePodSandBox` por Calico en pods nuevos, revisar la fecha de expiración de ese token.
+- **Scripts útiles** (`scripts/`): `deploy-landing.sh` (despliegue de la landing), `deploy-nodered.sh` (despliegue de Node-RED; requiere `NODERED_PASSWORD` en el entorno), `sync-web-auth.sh` (clave web; hoy **sin namespaces por defecto** — Grafana y Node-RED usan su propio login), `computer_info.sh`.
 
 ## Referencias
 
 - [README-TECH.md — Fase 12: Monitoreo y observabilidad](./README-TECH.md#fase-12--monitoreo-y-observabilidad)
 - [README-TECH.md — Clave única de acceso web](./README-TECH.md#clave-única-de-acceso-web)
 - [README-TECH.md — Web pública (landing)](./README-TECH.md#web-pública-landing)
-- Manifiestos: `files/monitoring/grafana-ingress.yaml`, `files/pdbs/`, `files/networkpolicies/`, `files/landing/`
+- Manifiestos: `files/monitoring/grafana-ingress.yaml`, `files/nodered/`, `files/pdbs/`, `files/networkpolicies/`, `files/landing/`

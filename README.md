@@ -20,8 +20,9 @@ D-Lab aloja los servicios personales que el propietario usa y vigila:
 |----------|--------|-----------|
 | **Landing** | La página de bienvenida: quién es el propietario y qué proyectos tiene | [elarreglador.eu](https://elarreglador.eu) |
 | **Grafana** | Paneles con gráficas: cómo está de salud el cluster y los equipos en tiempo real | [grafana.elarreglador.eu](https://grafana.elarreglador.eu) |
+| **Node-RED** | Herramienta visual para conectar dispositivos y servicios (automatización y lógica) | [nodered.elarreglador.eu](https://nodered.elarreglador.eu) |
 
-> Nota: Grafana pide usuario y contraseña. La landing, en cambio, es pública: cualquiera puede verla. Es una decisión deliberada: un salón abierto a la calle, pero los cuartos de máquinas con llave.
+> Nota: Grafana y Node-RED piden usuario y contraseña. La landing, en cambio, es pública: cualquiera puede verla. Es una decisión deliberada: un salón abierto a la calle, pero los cuartos de máquinas con llave.
 
 ## ¿Cómo funciona por dentro?
 

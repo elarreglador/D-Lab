@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pods
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nodered-data
+  namespace: pods
+  labels:
+    app: nodered
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: nfs-storage
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodered
+  namespace: pods
+  labels:
+    app: nodered
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nodered
+  template:
+    metadata:
+      labels:
+        app: nodered
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: nodered
+          image: nodered/node-red:5.0.4
+          args: ["--settings", "/config/settings.js"]
+          ports:
+            - containerPort: 1880
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /
+              port: 1880
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 1880
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 1880
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: settings
+              mountPath: /config/settings.js
+              subPath: settings.js
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nodered-data
+        - name: settings
+          secret:
+            secretName: nodered-settings
+            defaultMode: 0440
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nodered
+  namespace: pods
+  labels:
+    app: nodered
+spec:
+  selector:
+    app: nodered
+  ports:
+    - port: 1880
+      targetPort: 1880

@@ -176,7 +176,7 @@ Máquina virtual en IONOS para acceso externo al cluster:
 | [00-Requisitos.md](./00-Requisitos.md) | Requisitos de hardware, software y seguridad para el cluster K8S |
 | [01-Network.md](./01-Network.md) | Configuración de red estática, SSH, fail2ban, WireGuard VPN y router ZTE H3600P |
 | [02-vm.md](./02-vm.md) | Instalación y configuración de LXD, contenedores y conectividad |
-| [03-Aplicaciones.md](./03-Aplicaciones.md) | Aplicaciones del cluster: pods, imágenes, configuración y exposición (monitorización, landing, etc.) — sin credenciales |
+| [03-Aplicaciones.md](./03-Aplicaciones.md) | Aplicaciones del cluster: pods, imágenes, configuración y exposición (monitorización, Node-RED, landing, etc.) — sin credenciales |
 | [Hardware.md](./Hardware.md) | Especificaciones técnicas verificadas del Dell OptiPlex 3050 Micro (CPU, GPU, RAM, almacenamiento, red) |
 | [README-TECH.md](./README-TECH.md#fase-23--cluster-lxd) | Fase 2.3: Unificación de D1 y D2 en un mismo cluster LXD (sección en este documento) |
 | [incidentes/ssh_socket.md](./incidentes/ssh_socket.md) | Análisis y resolución del conflicto entre ssh.socket y ssh.service |
@@ -1593,8 +1593,9 @@ htpasswd -nbB elarreglador '<NUEVA_CLAVE>' > info_sensible/htpasswd-web
 ./scripts/sync-web-auth.sh
 ```
 
-**Estado actual**: ningún hostname público está protegido con la clave web. Grafana y la landing son excepciones:
+**Estado actual**: ningún hostname público está protegido con la clave web. Grafana, Node-RED y la landing son excepciones:
 - `grafana.elarreglador.eu` → login propio de Grafana (sin basic-auth).
+- `nodered.elarreglador.eu` → login propio de Node-RED (sin basic-auth; ver [03-Aplicaciones.md](./03-Aplicaciones.md)).
 - `elarreglador.eu` / `www.elarreglador.eu` → landing pública, 200 sin credenciales (ver [Web pública (landing)](#web-pública-landing)).
 
 Si algún servicio futuro se protege con la clave web, la verificación será: `401` sin credenciales, `200` con ellas (`curl -u elarreglador:CLAVE`).
