@@ -175,6 +175,7 @@ Máquina virtual en IONOS para acceso externo al cluster:
 | [00-Requisitos.md](./00-Requisitos.md) | Requisitos de hardware, software y seguridad para el cluster K8S |
 | [01-Network.md](./01-Network.md) | Configuración de red estática, SSH, fail2ban, WireGuard VPN y router ZTE H3600P |
 | [02-vm.md](./02-vm.md) | Instalación y configuración de LXD, contenedores y conectividad |
+| [03-Aplicaciones.md](./03-Aplicaciones.md) | Aplicaciones del cluster: pods, imágenes, configuración y exposición (monitorización, landing, etc.) — sin credenciales |
 | [Hardware.md](./Hardware.md) | Especificaciones técnicas verificadas del Dell OptiPlex 3050 Micro (CPU, GPU, RAM, almacenamiento, red) |
 | [README.md](./README.md#fase-23--cluster-lxd) | Fase 2.3: Unificación de D1 y D2 en un mismo cluster LXD (sección en este documento) |
 | [incidentes/ssh_socket.md](./incidentes/ssh_socket.md) | Análisis y resolución del conflicto entre ssh.socket y ssh.service |
@@ -1501,21 +1502,18 @@ Los containers LXD usan red **macvlan** (`macvlan0`), que por diseño impide que
    Durante este paso se detectó que **systemd-resolved de D1/D2 no resolvía** (los intentos de apt quedaban colgados). El stub `127.0.0.53` no respondía aunque los upstream (1.1.1.1/8.8.8.8) sí resolvían por `nslookup` directo. Solución de laboratorio: `resolv.conf` estático con `nameserver 1.1.1.1`/`8.8.8.8`.
    Manifiestos: Service headless `host-node` (ports 9100/19100) + Endpoints manuales + ServiceMonitor `host-node` (con label `release: kube-prometheus-stack`, requerida por el `serviceMonitorSelector` de Prometheus).
 
-3. **Grafana público con clave de acceso web** (ver [Clave única de acceso web](#clave-única-de-acceso-web)):
-   - Ingress `grafana` con `auth-type: basic`, `force-ssl-redirect`, TLS → `grafana.elarreglador.eu`.
+3. **Grafana público (login propio, sin basic-auth)**:
+   - Ingress `grafana` con `force-ssl-redirect`, TLS → `grafana.elarreglador.eu`. **Sin** anotaciones de auth: el login propio de Grafana es la única barrera (excepción a la [Clave única de acceso web](#clave-única-de-acceso-web), igual que la landing). Manifest versionado: `files/monitoring/grafana-ingress.yaml`.
    - Certificate `grafana-elarreglador-eu` (cert-manager, HTTP-01) en namespace `monitoring` — los secrets TLS deben vivir en el mismo namespace que el Ingress, por eso no se reutilizó el secret `elarreglador-eu-tls` (que está en `default`).
-   - Grafana sin anonymous: **login admin** (`admin` / `adminPassword` de `values-monitoring.yaml`). La clave de acceso web (`web-basic-auth`) sigue como barrera externa en el Ingress.
-   - `grafana.ini` (via `grafana.grafana.ini` en `values-monitoring.yaml`):
-     - `server.root_url = https://grafana.elarreglador.eu/` + `server.domain = grafana.elarreglador.eu` — **obligatorio** detrás del proxy TLS: sin ellos Grafana inyecta `appUrl=http://localhost:3000/` al frontend, lo que provoca que la sesión se pierda al navegar y el login reaparezca en cada página.
-     - `security.cookie_secure = true` + `security.cookie_samesite = lax` — cookie de sesión solo por HTTPS.
+   - Grafana sin anonymous: **login admin** (`admin` / `adminPassword` de `values-monitoring.yaml`).
+   - `grafana.ini` (via `grafana.grafana.ini`): `server.root_url`/`server.domain` (obligatorios detrás del proxy TLS; sin ellos `appUrl=http://localhost:3000/` y la sesión se pierde al navegar) y `security.cookie_secure`/`cookie_samesite`. Detalle y pods: [03-Aplicaciones.md](./03-Aplicaciones.md).
 
 4. **ServiceMonitor cert-manager** (Service `cert-manager:9402` en namespace `cert-manager`) + **PrometheusRule `alertas-personalizadas`** (grupo `host-alertas`): `HostDown` (hosts), `ClusterNodeNotReady`, `DiskPressureHost` (>85%), `CertificateExpiring` (<30 días).
 
 **Verificación**:
 ```bash
-# Public path: clave de acceso web 401 sin credenciales, 200 con ellas
-curl -s -o /dev/null -w '%{http_code}\n' https://grafana.elarreglador.eu/   # 401
-curl -s -o /dev/null -w '%{http_code}\n' -u elarreglador:CLAVE https://grafana.elarreglador.eu/  # 200 (login de Grafana tras la basic-auth)
+# Grafana: sin basic-auth → 302 → /login → 200 (página de login de Grafana)
+curl -s -L -o /dev/null -w '%{http_code}\n' https://grafana.elarreglador.eu/   # 200
 echo | openssl s_client -connect grafana.elarreglador.eu:443 -servername grafana.elarreglador.eu \
   | openssl x509 -noout -subject -issuer -dates   # CN=grafana.elarreglador.eu, Let's Encrypt
 
@@ -1529,11 +1527,11 @@ curl -s 'http://127.0.0.1:9090/api/v1/query?query=node_uname_info'
 ```
 
 **Credenciales** (guardar en backup local):
-- Clave única de acceso web (todos los servicios): usuario `elarreglador` / clave canónica en `info_sensible/htpasswd-web` (gitignored). Ver [Clave única de acceso web](#clave-única-de-acceso-web).
+- Clave única de acceso web (disponible para futuros servicios): usuario `elarreglador` / clave canónica en `info_sensible/htpasswd-web` (gitignored). Ver [Clave única de acceso web](#clave-única-de-acceso-web). **Actualmente ningún servicio la usa** (Grafana y landing son excepciones).
 - Grafana admin (mantenimiento): `admin` / password en `values-monitoring.yaml` (`adminPassword`).
 
 **Notas**:
-- **Incidencia resuelta**: Grafana pedía login en cada página. Causa raíz: falta de `root_url`/`domain` → el frontend recibía `appUrl=http://localhost:3000/` y la sesión se perdía al navegar. Se corrigió en `values-monitoring.yaml` (`server.root_url`/`domain` + `security.cookie_secure`/`cookie_samesite`) y se aplicó con `helm upgrade` en k8s-master-1 (backup previo en `/root/values-monitoring.yaml.bak-*`). Verificado: `appUrl=https://grafana.elarreglador.eu/`, login persiste entre páginas, basic-auth intacta (401 sin credenciales).
+- **Incidencia resuelta**: Grafana pedía login en cada página. Causa raíz: falta de `root_url`/`domain` → el frontend recibía `appUrl=http://localhost:3000/` y la sesión se perdía al navegar. Se corrigió en `values-monitoring.yaml` (`server.root_url`/`domain` + `security.cookie_secure`/`cookie_samesite`) y se aplicó con `helm upgrade` en k8s-master-1 (backup previo en `/root/values-monitoring.yaml.bak-*`). Verificado: `appUrl=https://grafana.elarreglador.eu/`, login persiste entre páginas. Posteriormente se retiró la basic-auth del Ingress de Grafana (login propio como única barrera) y se eliminó el Secret `web-basic-auth` de `monitoring`.
 - **Ojo con Grafana 13**: el endpoint `POST /login` espera **JSON** (`Content-Type: application/json`, cuerpo `{"user":...,"password":...}`), no form-urlencoded.
 - Las alertas por defecto de kube-prometheus-stack `TargetDown`, `etcdMembersDown` e `etcdInsufficientMembers` aparecen **firing** en AlertManager porque los targets `kube-etcd`, `kube-scheduler`, `kube-controller-manager` y `kube-proxy` no exponen métricas en los puertos por defecto en este cluster LXC. Es ruido esperable en esta configuración; la cadena principal (kubelet, apiserver, coredns, node-exporter, hosts) está **up**.
 - `Watchdog` siempre está en firing por diseño (alerta centinela para validar el pipeline).
@@ -1545,14 +1543,13 @@ curl -s 'http://127.0.0.1:9090/api/v1/query?query=node_uname_info'
 
 **Objetivo**: que cualquier servicio web expuesto públicamente pida siempre la misma clave de acceso, gestionada desde un único sitio (equivalente al `auth_basic_user_file` de un virtual server nginx clásico).
 
-**Cómo funciona**: ingress-nginx exige HTTP Basic Auth a nivel de Ingress mediante anotaciones. La clave (usuario `elarreglador`) se guarda como un único fichero htpasswd canónico y se replica como Secret `web-basic-auth` en cada namespace que tenga un Ingress público. Todos los servicios usan el mismo Secret.
+**Cómo funciona**: ingress-nginx exige HTTP Basic Auth a nivel de Ingress mediante anotaciones. La clave (usuario `elarreglador`) se guarda como un único fichero htpasswd canónico y se replica como Secret `web-basic-auth` en cada namespace que tenga un Ingress público protegido. Todos los servicios protegidos usan el mismo Secret.
 
 **Fichero canónico y sincronización**:
 - Fuente única: `info_sensible/htpasswd-web` (gitignored, formato `$apr1$`).
-- Script `scripts/sync-web-auth.sh`: lee el fichero local y crea/actualiza el Secret `web-basic-auth` en los namespaces listados (`monitoring` por defecto). Genera el YAML localmente y lo aplica por stdin vía `ssh server` (el hash nunca se escribe en disco de DV0).
+- Script `scripts/sync-web-auth.sh`: lee el fichero local y crea/actualiza el Secret `web-basic-auth` en los namespaces indicados vía `WEB_AUTH_NAMESPACES`. **Sin namespaces por defecto** (Grafana usa su propio login; la landing es pública). Genera el YAML localmente y lo aplica por stdin vía `ssh server` (el hash nunca se escribe en disco de DV0).
   ```bash
-  ./scripts/sync-web-auth.sh            # namespaces por defecto (monitoring)
-  WEB_AUTH_NAMESPACES="monitoring" ./scripts/sync-web-auth.sh
+  WEB_AUTH_NAMESPACES="ns1 ns2" ./scripts/sync-web-auth.sh
   ```
 
 **Anotaciones necesarias en cada Ingress público** (el valor de `auth-realm` es libre; el resto es idéntico en todos):
@@ -1571,14 +1568,11 @@ htpasswd -nbB elarreglador '<NUEVA_CLAVE>' > info_sensible/htpasswd-web
 ./scripts/sync-web-auth.sh
 ```
 
-**Verificación actual** (hostnames públicos protegidos):
-```bash
-curl -s -o /dev/null -w 'grafana sin-auth=%{http_code}\n' https://grafana.elarreglador.eu/
-curl -s -o /dev/null -w 'grafana con-auth=%{http_code}\n' -u elarreglador:CLAVE https://grafana.elarreglador.eu/
-# 401 sin credenciales, 200 con ellas
-```
+**Estado actual**: ningún hostname público está protegido con la clave web. Grafana y la landing son excepciones:
+- `grafana.elarreglador.eu` → login propio de Grafana (sin basic-auth).
+- `elarreglador.eu` / `www.elarreglador.eu` → landing pública, 200 sin credenciales (ver [Web pública (landing)](#web-pública-landing)).
 
-**Excepción**: `elarreglador.eu` y `www.elarreglador.eu` están **fuera** de esta protección: sirven la landing pública (ver [Web pública (landing)](#web-pública-landing)) y responden 200 sin credenciales.
+Si algún servicio futuro se protege con la clave web, la verificación será: `401` sin credenciales, `200` con ellas (`curl -u elarreglador:CLAVE`).
 
 **Nota de seguridad**: la clave sudo/LXD se reutiliza como clave web por decisión del señor (una sola clave para todo). Esto amplía su superficie de exposición (viaja en cada petición, cifrada por TLS). Mitigado con: `force-ssl-redirect`, hash `$apr1$` en Secret, fichero canónico gitignored y rotación centralizada. Si algún día se separan, solo hay que rotar la web por el procedimiento anterior.
 
