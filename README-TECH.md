@@ -1003,6 +1003,30 @@ Tras la redistribución de workers y renombrado de contenedores (k8s-worker-1 �
 
 **Estado actual**: VIP 192.168.1.30 en k8s-worker-1 (MASTER, D1), k8s-worker-2 como BACKUP (D2), NFS exportando correctamente, provisioner operativo.
 
+#### Almacenamiento persistente: origen físico y migración entre nodos
+
+**Dónde vive el dato de un pod.** El almacenamiento persistente de un pod no reside en el nodo que lo ejecuta, sino en el NFS por red; su origen físico último es el disco de los workers:
+
+```
+Pod (en k8s-worker-1, D1)
+   └─ monta PVC → StorageClass "nfs-storage" (default)
+        └─ provisioner nfs-subdir-external-provisioner → 192.168.1.30:/vol-storage
+             └─ NFS-Ganesha exporta GlusterFS "vol-storage" (Replicate, 2 copias)
+                  ├─ Brick 1 → k8s-worker-1 (D1): /mnt/data/brick ──► /dev/sda1 (D1)
+                  └─ Brick 2 → k8s-worker-2 (D2): /mnt/data/brick ──► /dev/sda1 (D2)
+```
+
+- Un pod que corre en **D1** escribe su copia principal en `/dev/sda1` (HDD 465,8G, ext4, montado en `/mnt/data`) de **k8s-worker-1**, que es un container LXC del host D1. Es decir, los datos persistentes de un pod en D1 viven **físicamente en D1**.
+- GlusterFS replica 2 mantiene una segunda copia en el brick de D2: si D1 cae, los datos sobreviven en D2.
+- El pod **no** escribe directo al disco local: aunque el brick esté en la misma máquina, el flujo pasa por la red (`192.168.1.30:2049`, NFSv3). Para el pod el volumen es un NFS transparente.
+
+**Migración entre nodos.** Un pod con PVC `nfs-storage` puede ser re-schedulado de D1 a D2 **conservando los datos**: el PV no tiene `nodeAffinity` y el StorageClass no fija nodo. Al relanzarse en D2, Kubernetes monta el mismo PVC (que GlusterFS replica en ambos workers) y el pod lee lo que escribió en D1. Verificado con el test de migración de la [Fase 9](#fase-9--despliegues-de-prueba).
+
+Matices:
+- **RWO (ReadWriteOnce)**: el PVC se monta en **un nodo a la vez**. No puede haber dos pods (D1 y D2) usando el mismo PVC simultáneamente; para Deployments de 1 réplica o StatefulSets es indiferente, para réplicas múltiples no comparten PVC.
+- **Si D1 cae por completo**: replica 2 + failover de la VIP a D2 mantienen el export disponible; el pod re-schedulado en D2 monta los datos intactos. Ojo: el cluster entero puede quedar sin quorum etcd (2 miembros) hasta recuperar D1, pero el **servicio NFS/GlusterFS perdura** vía el worker vivo (ver incidencia en tabla).
+- **Excepción**: Prometheus y AlertManager usan `emptyDir` (no PVC) por la incidencia TSDB/NFS, así que **pierden el histórico** al migrar de nodo. Ver [03-Aplicaciones.md](./03-Aplicaciones.md).
+
 #### Incidencias durante la implementación
 
 | Problema | Causa | Solución |
