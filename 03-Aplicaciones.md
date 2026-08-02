@@ -2,7 +2,7 @@
 
 **Objetivo**: documentar las aplicaciones desplegadas en el cluster Kubernetes de D-Lab: sus pods (workloads, imágenes, réplicas, recursos), su configuración específica y cómo se aplican los cambios. **Este documento es público (GitHub): no incluye credenciales ni secretos.** Las credenciales viven en `info_sensible/` (gitignored) y en `values-monitoring.yaml` dentro de k8s-master-1 (`/root/`), nunca en este repo.
 
-**Contexto**: ver [README.md](./README.md#fase-12--monitoreo-y-observabilidad) para el procedimiento de instalación. Manifiestos del repo en `files/`.
+**Contexto**: ver [README-TECH.md](./README-TECH.md#fase-12--monitoreo-y-observabilidad) para el procedimiento de instalación. Manifiestos del repo en `files/`.
 
 ---
 
@@ -82,7 +82,7 @@
 
 ## Referencias
 
-- [README.md — Fase 12: Monitoreo y observabilidad](./README.md#fase-12--monitoreo-y-observabilidad)
-- [README.md — Clave única de acceso web](./README.md#clave-única-de-acceso-web)
-- [README.md — Web pública (landing)](./README.md#web-pública-landing)
+- [README-TECH.md — Fase 12: Monitoreo y observabilidad](./README-TECH.md#fase-12--monitoreo-y-observabilidad)
+- [README-TECH.md — Clave única de acceso web](./README-TECH.md#clave-única-de-acceso-web)
+- [README-TECH.md — Web pública (landing)](./README-TECH.md#web-pública-landing)
 - Manifiestos: `files/monitoring/grafana-ingress.yaml`, `files/pdbs/`, `files/networkpolicies/`, `files/landing/`

@@ -4,7 +4,7 @@
 
 Este documento detalla los requisitos necesarios para crear un cluster Kubernetes bajo máquinas virtuales LXC. El cluster estará compuesto por dos nodos físicos Dell OptiPlex 3050 Micro: **D1** (control-plane) y **D2** (worker).
 
-Para el checklist de implementación, consultar [README.md](./README.md#guía-de-instalación).
+Para el checklist de implementación, consultar [README-TECH.md](./README-TECH.md#guía-de-instalación).
 
 ---
 

@@ -62,7 +62,7 @@ Ejemplo: se pierde el disco/contenedor de k8s-master-1.
 
 ### Escenario C — Reconstrucción total del laboratorio (pérdida de ambos hosts)
 
-1. **Reinstalar** D1/D2 (SO + LXC + contenedores) según `README.md` (Guía de Instalación).
+1. **Reinstalar** D1/D2 (SO + LXC + contenedores) según `README-TECH.md` (Guía de Instalación).
 2. **Reinicializar** el cluster con `kubeadm init` (Fase 5) y unir workers (Fase 7).
 3. **Restaurar etcd** desde la snapshot (Escenario B), **preferiblemente la del nodo que no falló**, o desde el backup local si un nodo sobrevive.
 4. **Reinstalar addons** desde el repo (flannel, ingress-nginx, cert-manager, kube-prometheus-stack, provisioner NFS) y reaplicar los manifiestos de `files/`.
