@@ -21,8 +21,9 @@ D-Lab aloja los servicios personales que el propietario usa y vigila:
 | **Landing** | La página de bienvenida: quién es el propietario y qué proyectos tiene | [elarreglador.eu](https://elarreglador.eu) |
 | **Grafana** | Paneles con gráficas: cómo está de salud el cluster y los equipos en tiempo real | [grafana.elarreglador.eu](https://grafana.elarreglador.eu) |
 | **Node-RED** | Herramienta visual para conectar dispositivos y servicios (automatización y lógica) | [nodered.elarreglador.eu](https://nodered.elarreglador.eu) |
+| **MariaDB** | Base de datos interna de los servicios (sin acceso desde el exterior) | interna |
 
-> Nota: Grafana y Node-RED piden usuario y contraseña. La landing, en cambio, es pública: cualquiera puede verla. Es una decisión deliberada: un salón abierto a la calle, pero los cuartos de máquinas con llave.
+> Nota: Grafana y Node-RED piden usuario y contraseña. La landing, en cambio, es pública: cualquiera puede verla. Es una decisión deliberada: un salón abierto a la calle, pero los cuartos de máquinas con llave. MariaDB es interna: no tiene dirección pública y solo la alcanzan los servicios del propio cluster.
 
 ## ¿Cómo funciona por dentro?
 
@@ -52,7 +53,7 @@ Internet ───> Un pequeño servidor en la nube (DV0) ───> D-Lab (los 
 
 - **Ver** la página pública de la landing (sin contraseña).
 - **Entrar** en Grafana si dispone de una cuenta (para ver los paneles de estado).
-- Nada más, por diseño: el resto del cluster es interno y privado.
+- Nada más, por diseño: el resto del cluster (incluida la base de datos) es interno y privado.
 
 ## Limitaciones honestas
 

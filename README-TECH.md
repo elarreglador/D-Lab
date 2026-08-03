@@ -1018,7 +1018,7 @@ Pod (en k8s-worker-1, D1)
 
 - Un pod que corre en **D1** escribe su copia principal en `/dev/sda1` (HDD 465,8G, ext4, montado en `/mnt/data`) de **k8s-worker-1**, que es un container LXC del host D1. Es decir, los datos persistentes de un pod en D1 viven **físicamente en D1**.
 - GlusterFS replica 2 mantiene una segunda copia en el brick de D2: si D1 cae, los datos sobreviven en D2.
-- El pod **no** escribe directo al disco local: aunque el brick esté en la misma máquina, el flujo pasa por la red (`192.168.1.30:2049`, NFSv3). Para el pod el volumen es un NFS transparente.
+- El pod **no** escribe directo al disco local: aunque el brick esté en la misma máquina, el flujo pasa por la red (`192.168.1.30:2049`). Para el pod el volumen es un NFS transparente. El StorageClass por defecto `nfs-storage` monta con **NFSv3** (`nfsvers=3`); existe `nfs-storage-v4` para apps que necesitan **locks de archivo** (ver fila NLM/NFSv3 en incidencias).
 
 **Migración entre nodos.** Un pod con PVC `nfs-storage` puede ser re-schedulado de D1 a D2 **conservando los datos**: el PV no tiene `nodeAffinity` y el StorageClass no fija nodo. Al relanzarse en D2, Kubernetes monta el mismo PVC (que GlusterFS replica en ambos workers) y el pod lee lo que escribió en D1. Verificado con el test de migración de la [Fase 9](#fase-9--despliegues-de-prueba).
 
@@ -1034,6 +1034,7 @@ Matices:
 | `mkdir: Bad message` en `/mnt/data` | Filesystem ext4 corrupto en D2 tras escrituras previas | `mkfs.ext4 -F /dev/sda1` (no había datos importantes) |
 | NFS-Ganesha: `No export entries found` y `Incorrect or missing parameters for export` | El parámetro `volume_name` no es válido en FSAL GLUSTER; debe usarse `volume` | Cambiar `volume_name = "vol-storage"` → `volume = "vol-storage"` en `/etc/ganesha/ganesha.conf` |
 | NFS mount falla con `mount system call failed` | NFSv4 requiere Kerberos en NFS-Ganesha sin configuración adicional | Forzar NFSv3 con `mountOptions: {nfsvers=3}` en el Helm chart del provisioner |
+| MariaDB no arranca: `mariadbd --bootstrap` en estado `D` y `lockd: server not responding` | NFS-Ganesha **no publica NLM** (programa 100021 ausente en `rpcinfo`); NFSv3 usa NLM para `flock`/`fcntl` y el pod que usa locks (MariaDB) se cuelga en I/O ininterrumpible | Usar **NFSv4** (integra los locks en el protocolo, sin NLM): StorageClass `nfs-storage-v4` con `mountOptions: {nfsvers=4.0, minorversion=0}`. Verificado: `flock` responde y escritura ~12 MB/s. Ver [03-Aplicaciones.md — MariaDB](./03-Aplicaciones.md#mariadb) |
 | D2 sin acceso a kubectl tras failover | API Server solo corre en D1; D2 no tiene kubeconfig configurado | Con etcd de **2 miembros** (quorum 2/2), la caída de D1 deja al cluster **sin quorum** (ver [Fase 13](#fase-13--resiliencia-y-alta-disponibilidad)): el API Server de k8s-master-2 no opera hasta recuperar D1. Lo que sí perdura es el **servicio NFS/GlusterFS** vía el worker vivo (replica 2 + VIP), por lo que los datos quedan intactos al recuperar el nodo. |
 | Mismo UUID GlusterFS en ambos workers tras clone | k8s-worker-1 fue clonado de k8s-worker-2, heredando `/var/lib/glusterd/*` | `rm -rf /var/lib/glusterd/*` y reiniciar glusterd en cada worker para regenerar UUID único |
 | GlusterFS peers apuntan a IP incorrecta tras reubicar contenedores | k8s-worker-1 renombrado y movido a D1 (192.168.1.31) pero peer/brick seguía referenciando 192.168.1.22 | Reconstruir GlusterFS desde cero: stop/delete volume, detach peers, reset workers, recreate con IPs correctas |
@@ -1597,6 +1598,8 @@ htpasswd -nbB elarreglador '<NUEVA_CLAVE>' > info_sensible/htpasswd-web
 - `grafana.elarreglador.eu` → login propio de Grafana (sin basic-auth).
 - `nodered.elarreglador.eu` → login propio de Node-RED (sin basic-auth; ver [03-Aplicaciones.md](./03-Aplicaciones.md)).
 - `elarreglador.eu` / `www.elarreglador.eu` → landing pública, 200 sin credenciales (ver [Web pública (landing)](#web-pública-landing)).
+
+MariaDB no tiene hostname público: es interna (sin Ingress); la barrera es la NetworkPolicy (solo pods del namespace `pods`). Ver [03-Aplicaciones.md — MariaDB](./03-Aplicaciones.md#mariadb).
 
 Si algún servicio futuro se protege con la clave web, la verificación será: `401` sin credenciales, `200` con ellas (`curl -u elarreglador:CLAVE`).
 
