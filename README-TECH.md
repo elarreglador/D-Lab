@@ -191,6 +191,7 @@ Máquina virtual en IONOS para acceso externo al cluster:
 | [README-TECH.md#fase-11--nginx-ingress-controller](./README-TECH.md#fase-11--nginx-ingress-controller) | Fase 11: Ingress Controller passthrough total (nginx DV0 stream → ingress-nginx) + cert-manager |
 | [README-TECH.md#fase-12--monitoreo-y-observabilidad](./README-TECH.md#fase-12--monitoreo-y-observabilidad) | Fase 12: kube-prometheus-stack (Prometheus/Grafana/AlertManager) + node-exporter hosts + alertas |
 | [incidentes/dr-restore.md](./incidentes/dr-restore.md) | Estrategia de disaster recovery: backups etcd redundantes en ambos masters + procedimientos de restauración (RPO/RTO) |
+| [04-Operaciones.md](./04-Operaciones.md) | Procedimiento de apagado y arranque controlado del cluster + scripts `scripts/D-lab_stop.sh` / `scripts/D-lab_start.sh` |
 
 ---
 
