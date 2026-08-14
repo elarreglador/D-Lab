@@ -170,6 +170,11 @@ wait_service_active() {
   return 1
 }
 
+nfs_export_ok() {
+  local host=$1 ctr=$2
+  $SSH "$host" "lxc exec $ctr -- timeout 10 showmount -e localhost" 2>/dev/null | grep -q "/vol-storage"
+}
+
 verify_storage() {
   log "Verificación de almacenamiento (GlusterFS / NFS-Ganesha / Keepalived)"
   local host ctr svc s
@@ -179,6 +184,15 @@ verify_storage() {
     for svc in glusterd nfs-ganesha keepalived; do
       if s=$(wait_service_active "$host" "$ctr" "$svc" 30); then
         ok "$ctr/$svc: active"
+        if [[ "$svc" == "nfs-ganesha" ]] && ! nfs_export_ok "$host" "$ctr"; then
+          warn "$ctr/nfs-ganesha: active pero export /vol-storage no visible; reiniciando (race glusterd)..."
+          $SSH "$host" "lxc exec $ctr -- systemctl restart nfs-ganesha" || true
+          if nfs_export_ok "$host" "$ctr"; then
+            ok "$ctr/nfs-ganesha: export visible tras reinicio"
+          else
+            warn "$ctr/nfs-ganesha: export sigue sin visible; los PVCs podrían fallar"
+          fi
+        fi
         continue
       fi
       if [[ "$svc" == "nfs-ganesha" ]]; then

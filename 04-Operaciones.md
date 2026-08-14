@@ -2,7 +2,8 @@
 
 **Objetivo**: apagar y encender el cluster D-Lab (D1 + D2) de forma controlada y segura, minimizando el riesgo de problemas tanto durante el apagado como durante el arranque.
 
-**Estado**: procedimiento elaborado a partir de la arquitectura documentada en [README-TECH.md](./README-TECH.md) y [03-Aplicaciones.md](./03-Aplicaciones.md). **Pendiente de drill**: tras la primera ejecución verificada, sustituir esta nota por `(verificado YYYY-MM-DD)` y ajustar lo que difiera de lo observado.
+**Estado**: procedimiento validado con arranque real del cluster `(verificado 2026-08-14)`. Observaciones del drill:
+- El race GlusterFS↔NFS-Ganesha se manifestó tal como se documenta: `nfs-ganesha` quedaba `active` (systemd) **sin export creado** (`showmount` vacío), por lo que los montajes NFS fallaban con `access denied`. Tras el drill se reforzó el script para detectar y auto-reparar esta condición (ver [Arranque controlado](#arranque-controlado)).
 
 **Alcance**: cluster Kubernetes + hosts D1/D2. En un apagado normal **DV0 se deja encendido** (preserva WireGuard, nginx y el acceso remoto); para apagado total del laboratorio usar `INCLUDE_DV0=1`.
 
@@ -131,6 +132,8 @@ ssh DV0 "sudo poweroff"
 
 El script: espera a que D1/D2 respondan por SSH (hay que **encenderlos físicamente**), espera a que **WireGuard esté activo en D1/D2** (los proxies LXC bindean la IP WG del host, p. ej. `10.8.0.11:6443`; sin WG no hay API Server ni exposición vía DV0), comprueba **sudo sin contraseña**, asegura el daemon LXD, espera al cluster LXD, arranca los 4 contenedores, espera el API Server (quorum etcd), espera nodos `Ready`, verifica el almacenamiento, espera los workloads, comprueba los endpoints públicos y el estado de WireGuard. Variables iguales que en el apagado, más `START_TIMEOUT=600` (espera total para SSH/API/nodos).
 
+> **Race GlusterFS ↔ NFS-Ganesha (auto-reparado por el script)**: `nfs-ganesha` puede quedar `active` aunque su export no se haya creado (si arrancó antes de que `glusterd` estuviera listo; log: `Could not create export for (/vol-storage)`). El script, tras confirmar `active`, verifica el export con `showmount -e localhost` y, si `/vol-storage` no aparece, **reinicia `nfs-ganesha` y re-verifica**. Si tras el reinicio el export sigue ausente, avisa explícitamente (los PVCs de `pods/mariadb` y `pods/nodered` fallarían). `(verificado 2026-08-14)`
+
 ### Manual (equivalente)
 
 1. **Encender físicamente D1 y D2** (y DV0 si es apagado total). Esperar a que respondan.
@@ -205,7 +208,7 @@ ssh D1 "lxc exec k8s-worker-1 -- ip -4 addr show eth0 | grep 192.168.1.30"   # V
 | Riesgo | Probabilidad | Mitigación |
 |--------|--------------|------------|
 | etcd sin quorum tras el arranque (un master no levanta) | Baja (parada limpia) | Arrancar **ambos** masters y verificar `readyz`. Si un etcd no arranca, usar DR: `etcdctl snapshot restore` ([incidentes/dr-restore.md](./incidentes/dr-restore.md)). |
-| NFS-Ganesha no arranca tras un glusterd lento | Media (conocido) | Verificar y reiniciar `nfs-ganesha`; el orden del script lo cubre. |
+| NFS-Ganesha no arranca tras un glusterd lento | Media (conocido) | El arranque automático verifica el export (`showmount -e localhost`) y reinicia `nfs-ganesha` si no aparece, con re-verificación. `(verificado 2026-08-14)` |
 | Nodo `NotReady` por kubelet en LXC (`/proc/sys`, kmsg) | Baja (config persistida) | Aplicar el troubleshooting de K8s en LXC de README-TECH.md. |
 | PDB bloqueando evictions | n/a | No se usa `drain` en apagado total. Para mantenimiento de **un solo** nodo, ver nota de PDBs en [03-Aplicaciones.md](./03-Aplicaciones.md). |
 | Ruteo WireGuard roto tras boot | Baja (split-tunnel) | El arranque automático espera `wg-quick@wg0` activo en D1/D2 antes de levantar los contenedores. Si hay bucles de ruteo, seguir [01-Network.md](./01-Network.md#wireguard-estabilidad-y-split-tunnel). |
