@@ -336,6 +336,67 @@ kubectl get nodes
 kubectl get pods -A
 ```
 
+### Radio SDR remota (rtl_tcp) — LXC proxy device
+
+Cadena de acceso público para el servidor de radio (servicio `rtl-sdr`, ver [03-Aplicaciones.md#radio-sdr-remota-rtl_tcp](./03-Aplicaciones.md#radio-sdr-remota-rtl_tcp)):
+
+```
+GQRX (RTL-SDR TCP) → sdr.elarreglador.eu:1234
+  → nginx stream DV0 (listen 1234 → 10.8.0.11:1234)        [en DV0]
+  → LXC proxy device `proxyrtlsdr` (10.8.0.11:1234)          [en D1]
+  → 127.0.0.1:31234 (NodePort `rtl-sdr`, k8s-worker-1)
+  → pod rtl-sdr (privilegiado, /dev/bus/usb) → dongle USB
+```
+
+**1. Passthrough del dongle al contenedor k8s-worker-1** (device `usb` de LXD; aplica en caliente sin reiniciar el contenedor):
+
+```bash
+# En D1 (los drivers DVB se desenganchan solos: librtlsdr usa libusb con DETACH_KERNEL_DRIVER)
+lxc config device add k8s-worker-1 rtlsdr usb vendorid=0bda productid=2838
+# Verificar dentro del contenedor: debe aparecer /dev/bus/usb/<bus>/<dev>
+lxc exec k8s-worker-1 -- ls -l /dev/bus/usb/
+```
+
+**2. Proxy LXC hacia el NodePort** (escucha en la IP WireGuard de D1, igual que `proxy6443`):
+
+```bash
+# En D1
+lxc config device add k8s-worker-1 proxyrtlsdr proxy \
+  listen=tcp:10.8.0.11:1234 connect=tcp:127.0.0.1:31234
+```
+
+El `connect=tcp:127.0.0.1:31234` se resuelve **dentro del namespace del contenedor** k8s-worker-1, donde kube-proxy DNATea el NodePort `rtl-sdr` hacia el pod.
+
+**3. nginx stream en DV0** (`/etc/nginx/stream.conf.d/sdr.conf`, requiere sudo en DV0):
+
+```nginx
+upstream sdr_rtltcp {
+    server 10.8.0.11:1234;
+}
+server {
+    listen 1234;
+    proxy_pass sdr_rtltcp;
+    proxy_timeout 300s;
+}
+```
+
+```bash
+# En DV0
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+**4. DNS**: `sdr.elarreglador.eu` resuelve vía el wildcard `*.elarreglador.eu → 82.223.50.169` (no requiere registro nuevo).
+
+**Endurecimiento opcional** (D1, requiere sudo; no imprescindible porque librtlsdr desconecta el driver del kernel en runtime): blacklist de drivers DVB en `/etc/modprobe.d/rtlsdr-blacklist.conf`:
+
+```
+blacklist dvb_usb_rtl28xxu
+blacklist rtl2832
+blacklist rtl2832_sdr
+```
+
+**Verificación**: la cabecera DongleInfo de 12 bytes (magic `RTL0`) se recibe al conectar a `10.8.0.11:1234` (desde hosts con acceso a la WG) y al extremo público `sdr.elarreglador.eu:1234` (verificado 2026-08-14).
+
 ## LXC (lxd client) en DV0
 
 DV0 gestiona el cluster LXD de forma remota usando el binario real de LXC directamente (bypasseando snapd, que es inestable con 394MiB RAM).

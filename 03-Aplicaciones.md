@@ -77,6 +77,36 @@
 - **Recursos**: requests 100m/256Mi, limits 500m/512Mi.
 - **Despliegue**: `NODERED_PASSWORD=<clave> ./scripts/deploy-nodered.sh` (la clave solo en el entorno; el hash se genera con python3-bcrypt sin escribirla en disco).
 
+## Radio SDR remota (rtl_tcp)
+
+- **Acceso público**: `sdr.elarreglador.eu:1234` (TCP) — servidor `rtl_tcp` (verificado 2026-08-14: cabecera DongleInfo `RTL0` en el extremo público). **Sin autenticación**: cualquiera con el host:puerto puede sintonizar; **un solo cliente a la vez** (comportamiento nativo de rtl_tcp; el segundo queda a la espera hasta que el primero desconecte).
+- **Hardware**: dongle RTL-SDR v3 (USB `0bda:2838`) + upconverter Nooelec Ham It Up (+125 MHz), conectados en D1.
+- **Workload**: Deployment `rtl-sdr` (1 réplica, imagen `skl256/rtl_tcp`, namespace `pods`), **privilegiado** y anclado a **k8s-worker-1** con `nodeSelector` (`eu.elarreglador/sdr=true`). Monta por `hostPath` el directorio `/dev/bus/usb` del nodo (el dongle se pasa al contenedor LXC k8s-worker-1 con un device `usb` de LXD). Sin PVC (stateless).
+- **Service**: `rtl-sdr`, NodePort `1234 → 31234/TCP`. Las probes son `exec` (`pgrep rtl_tcp`) a propósito: una probe `tcpSocket` al 1234 consumiría el slot del único cliente.
+- **Recursos**: requests 50m/64Mi, limits 250m/256Mi.
+- **Cadena de acceso**:
+  ```
+  GQRX (RTL-SDR TCP) → sdr.elarreglador.eu:1234
+    → nginx stream DV0 (listen 1234 → 10.8.0.11:1234)
+    → LXC proxy device `proxyrtlsdr` en D1 (10.8.0.11:1234 → 127.0.0.1:31234)
+    → Service NodePort `rtl-sdr` 31234 → pod rtl-sdr → dongle USB en k8s-worker-1
+  ```
+- **NetworkPolicy** (`files/sdr/networkpolicy.yaml`): `rtlsdr-allow` — ingress TCP/1234 desde cualquier origen (el tráfico NodePort entra DNAT desde el nodo; el retorno lo cubre conntrack) y egress solo DNS.
+- **Despliegue**: `./scripts/deploy-sdr.sh` (etiqueta el nodo, aplica manifests y espera rollout). Los pasos de infraestructura en D1 (device `usb` + proxy LXC) se hacen una sola vez y están en [01-Network.md](./01-Network.md).
+- **Instrucciones GQRX del cliente** (los mismos parámetros están publicados en la landing, sección Servicios D-Lab):
+
+  | Parámetro | Valor |
+  |-----------|-------|
+  | Dispositivo | RTL-SDR TCP |
+  | Host | `sdr.elarreglador.eu` |
+  | Puerto | `1234` |
+  | LNB LO (compensación upconverter Ham It Up +125 MHz) | **−125 MHz** |
+  | Sample rate (input rate) | `960000` (valor publicado en la landing; el defecto de 2.4 MS/s ≈ 38 Mbps puede saturar el enlace de DV0) |
+  | Clientes simultáneos | 1 |
+
+  Device string alternativo en GQRX: `rtl_tcp=sdr.elarreglador.eu:1234`.
+- **Notas operativas**: si el dongle se desenchufa, rtl_tcp muere y el pod se reinicia (se recupera al reenchufar). El pod no tiene PDB: al drenar o apagar k8s-worker-1 queda `Pending` hasta que el nodo vuelva.
+
 ## MariaDB
 
 - **Acceso**: solo interno al cluster. Sin URL pública ni Ingress: se gestiona por terminal vía `kubectl exec` / `kubectl run` desde el namespace `pods`.
@@ -95,19 +125,20 @@
 | `elarreglador.eu` / `www.elarreglador.eu` | Landing (pública) | ninguna (200 sin credenciales) |
 | `grafana.elarreglador.eu` | Grafana | login de Grafana |
 | `nodered.elarreglador.eu` | Node-RED | login propio de Node-RED |
+| `sdr.elarreglador.eu:1234` | Radio SDR (rtl_tcp, GQRX) | ninguna (recepción abierta; un cliente a la vez) |
 | prometheus / alertmanager / **mariadb** | — | internos (sin ingress) |
 
 ## PDBs y NetworkPolicies
 
 - **PDBs** (manifiestos en `files/pdbs/`): `landing`, `coredns`, `ingress-nginx`, `calico-kube-controllers`, `calico-typha`, `grafana`, `prometheus`, `alertmanager`.
-- **NetworkPolicies** (manifiestos en `files/networkpolicies/`): `landing-allow-ingress-nginx` (default, app=landing) y `coredns-allow-dns` (kube-system). El resto del tráfico se rige por el modelo policy-only de Calico.
+- **NetworkPolicies** (manifiestos en `files/networkpolicies/`, `files/mariadb/networkpolicy.yaml`, `files/nodered/networkpolicy.yaml`, `files/sdr/networkpolicy.yaml`): `landing-allow-ingress-nginx` (default, app=landing), `coredns-allow-dns` (kube-system), `mariadb-allow-pods`, `nodered-allow-ingress-nginx` y `rtlsdr-allow`. El resto del tráfico se rige por el modelo policy-only de Calico.
 
 ## Notas operativas
 
 - **Alertas firing por diseño**: `TargetDown`, `etcdMembersDown`, `etcdInsufficientMembers` (targets `kube-etcd`/`kube-scheduler`/`kube-controller-manager`/`kube-proxy` no exponen métricas en los puertos por defecto en LXC) y `Watchdog` (centinela). La cadena principal (kubelet, apiserver, coredns, node-exporter, hosts) está **up**.
 - **Credenciales**: nunca en el repo. Grafana admin → `values-monitoring.yaml` en k8s-master-1. Clave web / secretos → `info_sensible/` (gitignored).
 - **CNI Calico — tokens de `calico-kubeconfig`**: el token del SA `calico-cni-plugin` usado por el plugin CNI en los 4 nodos (`/etc/cni/net.d/calico-kubeconfig`) **expira** (el emitido por kubeadm el 2026-08-01 caducó a las 24 h y todos los pods nuevos fallaban con `error getting ClusterInformation: ... Unauthorized`). Se fijó creando el Secret `calico-cni-plugin-token` (kube-system, anotación `kubernetes.io/service-account.name`) — sin expiración — y reescribiendo el `token:` de ese kubeconfig en los 4 nodos. Si vuelve a aparecer `FailedCreatePodSandBox` por Calico en pods nuevos, revisar la fecha de expiración de ese token.
-- **Scripts útiles** (`scripts/`): `deploy-landing.sh` (despliegue de la landing), `deploy-nodered.sh` (despliegue de Node-RED; requiere `NODERED_PASSWORD` en el entorno), `deploy-mariadb.sh` (despliegue de MariaDB; requiere `MARIADB_ROOT_PASSWORD` y `MARIADB_PASSWORD` en el entorno), `sync-web-auth.sh` (clave web; hoy **sin namespaces por defecto** — Grafana y Node-RED usan su propio login), `computer_info.sh`.
+- **Scripts útiles** (`scripts/`): `deploy-landing.sh` (despliegue de la landing), `deploy-nodered.sh` (despliegue de Node-RED; requiere `NODERED_PASSWORD` en el entorno), `deploy-mariadb.sh` (despliegue de MariaDB; requiere `MARIADB_ROOT_PASSWORD` y `MARIADB_PASSWORD` en el entorno), `deploy-sdr.sh` (despliegue del servidor rtl_tcp; etiqueta k8s-worker-1 y aplica `files/sdr/`), `sync-web-auth.sh` (clave web; hoy **sin namespaces por defecto** — Grafana y Node-RED usan su propio login), `computer_info.sh`.
 
 ## Referencias
 

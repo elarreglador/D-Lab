@@ -81,6 +81,13 @@ Dispositivo receptor de radio definido por software (SDR):
 - Rango: Aproximadamente 25 MHz a 1700 MHz
 - Conector: SMA
 
+**RTL-SDR v3 (dongle)**
+
+Dongle de recepción SDR conectado al host D1 y servido remotamente vía el servicio `rtl-sdr` del cluster:
+- USB ID `0bda:2838` (RTL2832U + Rafael Micro R820T2)
+- Usado junto al Ham It Up (+125 MHz) para recepción de bandas bajas
+- Paso por LXD al contenedor k8s-worker-1 (device `usb`) y servido con `rtl_tcp` (pod `rtl-sdr`); ver [03-Aplicaciones.md#radio-sdr-remota-rtl_tcp](./03-Aplicaciones.md#radio-sdr-remota-rtl_tcp)
+
 ### Equipos Computacionales
 
 #### Dell OptiPlex 3050 Micro (x2)
@@ -1821,6 +1828,14 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
 - [x] **Fase 13: Disaster Recovery**:
   - Backups etcd redundantes en ambos control-planes (`files/backup-etcd.sh`, `crictl exec` sobre etcd local) + copia por SSH al peer
   - Procedimientos de restauración y RPO/RTO en [incidentes/dr-restore.md](./incidentes/dr-restore.md)
+
+- [x] **Fase 14: Radio SDR remota (rtl_tcp)**:
+  - Dongle RTL-SDR v3 (0bda:2838) + Ham It Up en D1 → device `usb` LXD → k8s-worker-1
+  - Pod `rtl-sdr` (imagen `skl256/rtl_tcp`, privilegiado, `hostPath /dev/bus/usb`, anclado a k8s-worker-1 con `nodeSelector` `eu.elarreglador/sdr=true`) + Service NodePort `rtl-sdr` 1234:31234 + NetworkPolicy `rtlsdr-allow`
+  - Cadena pública: GQRX → `sdr.elarreglador.eu:1234` → nginx stream DV0 → LXC proxy `proxyrtlsdr` en D1 (10.8.0.11:1234) → NodePort 31234 → pod
+  - Un cliente a la vez (rtl_tcp); compensación upconverter por cliente (LNB LO = −125 MHz); parámetros GQRX publicados en la landing y en 03-Aplicaciones.md
+  - Verificado (2026-08-14): pod Running en k8s-worker-1; cabecera DongleInfo (magic `RTL0`) recibida en `10.8.0.11:1234` desde D1/​DV0 y en el extremo público `sdr.elarreglador.eu:1234` tras aplicar el bloque `stream` en DV0
+  - Detalle en [03-Aplicaciones.md#radio-sdr-remota-rtl_tcp](./03-Aplicaciones.md#radio-sdr-remota-rtl_tcp) y [01-Network.md#radio-sdr-remota-rtl_tcp--lxc-proxy-device](./01-Network.md#radio-sdr-remota-rtl_tcp--lxc-proxy-device)
 
 ### En Progreso 🔄
 
