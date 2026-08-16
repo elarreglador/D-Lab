@@ -6,6 +6,58 @@
 
 ---
 
+## Stack multimedia (Jellyseerr + *arr + Prowlarr + qBittorrent + Jellyfin)
+
+Facade de peticiones (Jellyseerr) → organizadores (Sonarr/Radarr) → rastreo (Prowlarr + FlareSolverr) → descarga (qBittorrent) → servidor de medios (Jellyfin). Namespace `multimedia`.
+
+### Resumen de workloads
+
+| App | Workload | Imagen | Servicio | Puerto | IP LAN | Nodo (nodeSelector) |
+|-----|----------|--------|----------|--------|--------|---------------------|
+| qBittorrent | Deployment (1) | lscr.io/linuxserver/qbittorrent | `qbittorrent` | 8080 | `192.168.1.58` | k8s-master-1 |
+| qBittorrent (torrent) | idem | — | `qbittorrent-torrent` | 6881 T/U | `192.168.1.59` | k8s-master-1 |
+| Sonarr | Deployment (1) | lscr.io/linuxserver/sonarr | `sonarr` | 8989 | `192.168.1.55` | k8s-worker-1 |
+| Radarr | Deployment (1) | lscr.io/linuxserver/radarr | `radarr` | 7878 | `192.168.1.56` | k8s-worker-2 |
+| Prowlarr | Deployment (1) | lscr.io/linuxserver/prowlarr | `prowlarr` | 9696 | `192.168.1.57` | k8s-worker-1 |
+| FlareSolverr | Deployment (1) | ghcr.io/flaresolverr/flaresolverr | `flaresolverr` | 8191 | (sin IP LAN) | k8s-worker-1 |
+| Jellyfin | Deployment (1) | lscr.io/linuxserver/jellyfin | `jellyfin` | 8096 | `192.168.1.53` | k8s-worker-2 |
+| Jellyseerr | Deployment (1) | fallenbagel/jellyseerr | `jellyseerr` | 5055 | `192.168.1.54` | k8s-worker-2 |
+
+### Almacenamiento
+
+- **`media-data`**: PVC 400Gi RWX sobre `nfs-storage-v4` (GlusterFS/NFS-Ganesha, VIP `192.168.1.30`), montado en `/data`. Subárboles: `/data/media/{tv,movies}` (biblioteca final) y `/data/torrents/{tv,movies}` (descargas). Owner `1000:1000` (`abc`).
+- **Config de cada app**: PVC **local** `*-config-local` sobre el StorageClass `local-static` (PV estático `local-*-config`, path `/srv/k8s-local/<app>` en el LXC del nodo, con `nodeAffinity`). Decisión de diseño: el SQLite de los *arr en NFS/GlusterFS producía `database is locked` y crash-loops; el `/config` vive en disco local del nodo y solo `media-data` queda en NFS compartido.
+- **Gotcha Jellyseerr**: la imagen `fallenbagel/jellyseerr` almacena su configuración en **`/app/config`**, no en `/config`. El Deployment monta el PVC en `mountPath: /app/config` y el backup lo contempla (ver Backups) (verificado 2026-08-15; antes montaba `/config` y toda la config vivía en el overlay efímero del pod, perdiéndose al recrearlo).
+- **Permisos de `/data`** (`verificado 2026-08-15`): los archivos creados vía NFS/GlusterFS quedan con uid `4294967294` (squash) pero `chown 1000:1000` como root persiste correctamente (`abc:users`). El job `init-media-dirs` (aplicado por `deploy-media.sh`) hace `chown -R 1000:1000 /data/torrents /data/media` + `chmod 775` (dirs) / `664` (files) idempotente; reaplicar si se añade volumen o se pierden permisos.
+- Los PVC NFS legados (`*-config`, sin sufijo `-local`) se conservan **Bound pero sin consumidores** para rollback rápido.
+
+### Bootstrap (vía API, sin navegador)
+
+`source info_sensible/multimedia.env && ./scripts/multimedia-wizard.sh` — idempotente:
+1. qBittorrent: login + `save_path`/`temp_path`.
+2. Sonarr/Radarr: `authMethod=forms`, user `elarreglador`.
+3. Rootfolders `/data/media/{tv,movies}` + download client qBittorrent (categorías `tv-sonarr`/`movies-radarr`).
+4. Prowlarr: qBittorrent como DownloadClient, apps Sonarr/Radarr en `fullSync`, índice proxy **FlareSolverr** con tag `cloudflare`.
+5. Indexadores públicos: The Pirate Bay, YTS (directos) y EZTV, Nyaa.si (vía FlareSolverr). `TEST_INDEXERS=1` los testea.
+6. Jellyfin: flujo Startup (Configuration → User → RemoteAccess → Complete) y librerías `Movies`/`TV Shows` (idempotente: salta si el admin y las librerías ya existen).
+7. Jellyseerr: login con el admin de Jellyfin (primer arranque crea el admin; instalaciones existentes hacen re-login **sin** `hostname` para evitar el 500 "already configured"), marca `initialized` y activa las librerías Jellyfin y los servidores Sonarr/Radarr si faltan.
+
+### Estado y notas
+
+- **Auth de los *arr/Prowlarr**: `X-Api-Key` en el header (config.xml) **bypassa** la autenticación WebUI (`forms`) — es el mecanismo que usa el wizard. Las API keys viven en `info_sensible/multimedia.env`.
+- **Jellyfin**: primer usuario `elarreglador` (admin) con librerías `Movies` (id `f137a2dd...`) → `/data/media/movies` y `TV Shows` (id `767bff...`) → `/data/media/tv`. El wizard de primera configuración quedó completado correctamente (_verificado 2026-08-15_).
+- **Jellyseerr**: admin `elarreglador@d-lab.local` (integrado con el admin de Jellyfin), librerías `Movies`/`TV Shows` activas, Sonarr/Radarr como servidores de descarga (perfil `Any`, rootfolder correcto). La API key de Jellyfin registrada por Seerr se guarda en sus settings.
+- **Torrent expuesto**: `TCP/UDP 6881` externo via DV0 → D1 → NodePort `31681` (ver [01-Network.md](./01-Network.md)). Cadena configurada por `scripts/multimedia-expose-torrent.sh` (stream nginx en DV0 + proxies LXC `proxytorrent`/`proxytorrentudp`). TCP+UDP **abiertos y verificados** `(verificado 2026-08-16)`: `nc -zv -w 5 82.223.50.169 6881` → connect succeeded; UDP confirmado con query DHT `find_node` → respuesta de 297 B; qBittorrent reporta `connection_status: connected` (DHT/PEX/pares entrantes activos).
+- **Trackers**: la inyección de trackers se aplica por-torrent en tiempo de grab (qBittorrent no modifica torrents ya con announce).
+- **Backups**: `files/backup-multimedia.sh` (SQLite + ajustes) desde `install-multimedia-backup.sh`, cron `0 2 * * *` en ambos masters → `/backup/multimedia/`. El script parametriza la ruta de config por app: `/config` salvo jellyseerr que usa `/app/config` (`verificado 2026-08-15`; antes asumía `/config` para todas y el backup de jellyseerr fallaba con `tar: can't change directory to '/config'`). Rotación de 30 por app, tar plano (no gzip) + copia al peer master por SSH.
+- **Importación automática Radarr** (`verificado 2026-08-15`): fallaba con `System.ArgumentException: A path must be provided` (vía API `DownloadedMoviesScan` sin `Path`) o "No files found are eligible for import" cuando el `content_path` de qB no era accesible/legible. Arreglado en dos frentes: (1) permisos `1000:1000` en `/data` vía `init-media-dirs` (owner squash→`abc`); (2) el objetivo de import debe ser el `content_path` real del grab de qB, nunca un `DownloadedMoviesScan` a ciegas. E2E verificado de punta a punta: grab → descarga qB → import automático `downloadFolderImported` con cola a 0 y `hasFile:true`. Nota: si `DetectSample: Failed to get runtime from the file, make sure ffprobe is available`, el import queda `importBlocked` mientras la descarga cierra; el reintento del ciclo lo resuelve.
+- **IPs propias en LAN vía MetalLB** (`verificado 2026-08-16`): se instaló MetalLB v0.14.9 (manifest nativo en `files/metallb/`, sin Helm) con pool L2 `dlab-lan` = `192.168.1.50–192.168.1.64`. Cada servicio expuesto pasó a `type: LoadBalancer` con `loadBalancerIP` fijo y `externalTrafficPolicy: Local`: `.50` landing, `.51` grafana, `.52` nodered, `.53` jellyfin, `.54` jellyseerr, `.55` sonarr, `.56` radarr, `.57` prowlarr, `.58` qB WebUI, `.59` qB-torrent (NodePort `31681` preservado), `.60` rtl-sdr (NodePort `31234` preservado). MariaDB y FlareSolverr siguen ClusterIP (sin IP LAN, por decisión). El acceso **externo no cambia** (DV0 → NodePorts/ingress intactos; verificado `curl` 200/302 y `nc 82.223.50.169:6881`).
+- **Gotcha ruteo asimétrico + IPs LAN**: cada host físico **no alcanza las IP propias de sus propios LXC** (D1 no ve `.52`, `.55`, `.57`, `.58`, `.59`, `.60`; D2 no ve `.50`, `.51`, `.53`, `.54`, `.56`), mismo motivo documentado en `01-Network.md`. Desde cualquier otro equipo de la LAN todas responden (verificado con `curl`/`nc` cruzando D1↔D2). Las NetworkPolicies del stack se ampliaron con `ipBlock: 192.168.1.0/24` en `media-public`, `multimedia-internal`, landing y nodered para permitir el tráfico LAN.
+- **Gotcha SQLite sobre NFS (por qué configs siguen en local-static)**: la migración de configs a los PVC NFS `*-config` (nfs-storage-v4) se probó y **se revirtió**. Las apps .NET de los *arr usan `busytimeout=100` (100 ms) en su connection string; sobre NFS (GlusterFS/Ganesha, latencia) cualquier contención excede ese timeout → `database is locked` (crash-loop, visto en Sonarr bajo RSS sync) o `database disk image is malformed` al arrancar sobre el fichero NFS (reconstrucción vía `sqlite3 .recover` no evita el patrón). Es el motivo histórico de `local-static` (`storage.yaml`). Los PVC NFS `*-config` quedan Bound sin consumidores (referencia/uso futuro si se ajusta el timeout). Conclusión: **los configs se quedan en local-static y los nodeSelector permanecen** (sin movilidad de pods para los *arr/qB/Jellyfin); sí hay movilidad para Grafana/nodered/landing (sin nodeSelector) verificada con failover real manteniendo la IP.
+- **Failover MetalLB verificado** (`verificado 2026-08-16`): `kubectl cordon k8s-worker-2; kubectl delete pod grafana` → el pod se re-schedulo a k8s-worker-1 manteniendo el service `.51` y respondiendo por LAN (`curl http://192.168.1.51/login` → 200, 0.04 s; re-ARP automático de MetalLB). Aplicable a cualquier servicio sin nodeSelector; los anclados por hardware (rtl-sdr) o por local-static siguen ligados a su nodo.
+
+---
+
 ## Stack de monitorización: kube-prometheus-stack
 
 - **Helm release**: `kube-prometheus-stack` (chart v88.0.1), namespace `monitoring`.
@@ -68,6 +120,7 @@
 ## Node-RED
 
 - **URL pública**: `https://nodered.elarreglador.eu` (Ingress `nodered` en namespace `pods`).
+- **IP LAN** (`verificado 2026-08-16`): `192.168.1.52:1880` (LoadBalancer via MetalLB, `externalTrafficPolicy: Local`).
 - **Imagen**: `nodered/node-red:5.0.4` (Node.js 24), puerto 1880. Deployment 1 réplica en `pods`.
 - **Login propio de Node-RED** (usuario `elarreglador`): definido en `settings.js` (`adminAuth` con hash bcrypt) montado desde el Secret `nodered-settings` (Opaque, gitignored — se genera en despliegue). **Sin** basic-auth web ni anonymous.
 - **Secretos**: el hash bcrypt y el `credentialSecret` (cifrado de credenciales de nodos) se generan en el despliegue y **no** se versionan. Ver `scripts/deploy-nodered.sh`.
@@ -82,7 +135,7 @@
 - **Acceso público**: `sdr.elarreglador.eu:1234` (TCP) — servidor `rtl_tcp` (verificado 2026-08-14: cabecera DongleInfo `RTL0` en el extremo público). **Sin autenticación**: cualquiera con el host:puerto puede sintonizar; **un solo cliente a la vez** (comportamiento nativo de rtl_tcp; el segundo queda a la espera hasta que el primero desconecte).
 - **Hardware**: dongle RTL-SDR v3 (USB `0bda:2838`) + upconverter Nooelec Ham It Up (+125 MHz), conectados en D1.
 - **Workload**: Deployment `rtl-sdr` (1 réplica, imagen `skl256/rtl_tcp`, namespace `pods`), **privilegiado** y anclado a **k8s-worker-1** con `nodeSelector` (`eu.elarreglador/sdr=true`). Monta por `hostPath` el directorio `/dev/bus/usb` del nodo (el dongle se pasa al contenedor LXC k8s-worker-1 con un device `usb` de LXD). Sin PVC (stateless).
-- **Service**: `rtl-sdr`, NodePort `1234 → 31234/TCP`. Las probes son `exec` (`pgrep rtl_tcp`) a propósito: una probe `tcpSocket` al 1234 consumiría el slot del único cliente.
+- **Service**: `rtl-sdr`, NodePort `1234 → 31234/TCP`. Las probes son `exec` (`pgrep rtl_tcp`) a propósito: una probe `tcpSocket` al 1234 consumiría el slot del único cliente. Desde MetalLB añade además IP LAN `192.168.1.60:1234` (LoadBalancer, `externalTrafficPolicy: Local`; el NodePort se conserva para el tráfico externo).
 - **Recursos**: requests 50m/64Mi, limits 250m/256Mi.
 - **Cadena de acceso**:
   ```
@@ -127,17 +180,18 @@
 | `nodered.elarreglador.eu` | Node-RED | login propio de Node-RED |
 | `sdr.elarreglador.eu:1234` | Radio SDR (rtl_tcp, GQRX) | ninguna (recepción abierta; un cliente a la vez) |
 | prometheus / alertmanager / **mariadb** | — | internos (sin ingress) |
+| `192.168.1.50` … `.60` | IPs LAN (MetalLB, pool `.50–.64`) | ver mapa de IPs en el stack multimedia y notas de cada app; solo LAN |
 
 ## PDBs y NetworkPolicies
 
 - **PDBs** (manifiestos en `files/pdbs/`): `landing`, `coredns`, `ingress-nginx`, `calico-kube-controllers`, `calico-typha`, `grafana`, `prometheus`, `alertmanager`.
-- **NetworkPolicies** (manifiestos en `files/networkpolicies/`, `files/mariadb/networkpolicy.yaml`, `files/nodered/networkpolicy.yaml`, `files/sdr/networkpolicy.yaml`): `landing-allow-ingress-nginx` (default, app=landing), `coredns-allow-dns` (kube-system), `mariadb-allow-pods`, `nodered-allow-ingress-nginx` y `rtlsdr-allow`. El resto del tráfico se rige por el modelo policy-only de Calico.
+- **NetworkPolicies** (manifiestos en `files/networkpolicies/`, `files/mariadb/networkpolicy.yaml`, `files/nodered/networkpolicy.yaml`, `files/sdr/networkpolicy.yaml`, `files/multimedia/networkpolicy-*.yaml`): `landing-allow-ingress-nginx` (default, app=landing), `coredns-allow-dns` (kube-system), `mariadb-allow-pods`, `nodered-allow-ingress-nginx`, `rtlsdr-allow`, `media-public` (Jellyfin/Jellyseerr, `ipBlock: 192.168.1.0/24`) y `multimedia-internal` (Sonarr/Radarr/Prowlarr/qB WebUI, LAN `192.168.1.0/24`). El resto del tráfico se rige por el modelo policy-only de Calico. Las de acceso LAN (`landing`, `nodered`, `media-public`, `multimedia-internal`) se ampliaron para permitir `192.168.1.0/24` y solo funcionan si el Service LoadBalancer usa `externalTrafficPolicy: Local` (si no, kube-proxy aplica SNAT y la IP origen vista es la del nodo).
 
 ## Notas operativas
 
 - **Alertas firing por diseño**: `TargetDown`, `etcdMembersDown`, `etcdInsufficientMembers` (targets `kube-etcd`/`kube-scheduler`/`kube-controller-manager`/`kube-proxy` no exponen métricas en los puertos por defecto en LXC) y `Watchdog` (centinela). La cadena principal (kubelet, apiserver, coredns, node-exporter, hosts) está **up**.
 - **Credenciales**: nunca en el repo. Grafana admin → `values-monitoring.yaml` en k8s-master-1. Clave web / secretos → `info_sensible/` (gitignored).
-- **CNI Calico — tokens de `calico-kubeconfig`**: el token del SA `calico-cni-plugin` usado por el plugin CNI en los 4 nodos (`/etc/cni/net.d/calico-kubeconfig`) **expira** (el emitido por kubeadm el 2026-08-01 caducó a las 24 h y todos los pods nuevos fallaban con `error getting ClusterInformation: ... Unauthorized`). Se fijó creando el Secret `calico-cni-plugin-token` (kube-system, anotación `kubernetes.io/service-account.name`) — sin expiración — y reescribiendo el `token:` de ese kubeconfig en los 4 nodos. Si vuelve a aparecer `FailedCreatePodSandBox` por Calico en pods nuevos, revisar la fecha de expiración de ese token.
+- **CNI Calico — tokens de `calico-kubeconfig`**: el token del SA `calico-cni-plugin` usado por el plugin CNI en los 4 nodos (`/etc/cni/net.d/calico-kubeconfig`) **expira** (el emitido por kubeadm el 2026-08-01 caducó a las 24 h y todos los pods nuevos fallaban con `error getting ClusterInformation: ... Unauthorized`). Se fijó creando el Secret `calico-cni-plugin-token` (kube-system, anotación `kubernetes.io/service-account.name`) — sin expiración — y reescribiendo el `token:` de ese kubeconfig en los 4 nodos (`verificado 2026-08-15`; se renovó de nuevo con el static secret y el rollout de Radarr completó). Si vuelve a aparecer `FailedCreatePodSandBox` por Calico en pods nuevos, revisar la fecha de expiración de ese token: el proceso manual es copia de seguridad del kubeconfig, descarga del Secret de token estático y reescritura del campo `token` (`kubectl get secret calico-cni-plugin-token -n kube-system -o jsonpath='{.data.token}' | base64 -d`), en cada nodo.
 - **Scripts útiles** (`scripts/`): `deploy-landing.sh` (despliegue de la landing), `deploy-nodered.sh` (despliegue de Node-RED; requiere `NODERED_PASSWORD` en el entorno), `deploy-mariadb.sh` (despliegue de MariaDB; requiere `MARIADB_ROOT_PASSWORD` y `MARIADB_PASSWORD` en el entorno), `deploy-sdr.sh` (despliegue del servidor rtl_tcp; etiqueta k8s-worker-1 y aplica `files/sdr/`), `sync-web-auth.sh` (clave web; hoy **sin namespaces por defecto** — Grafana y Node-RED usan su propio login), `computer_info.sh`.
 
 ## Referencias
