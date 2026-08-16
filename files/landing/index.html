@@ -13,6 +13,7 @@
   <meta property="og:description" content="Perfil híbrido entre electricidad y programación. Linux de vieja escuela, sistemas embebidos y fiabilidad de infraestructuras críticas.">
   <link rel="icon" href="dlab.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="acerca-de-ti.css">
 </head>
 <body>
   <a class="skip-link" href="#contenido">Saltar al contenido</a>
@@ -50,7 +51,7 @@
         <figure class="hero-figure">
           <img class="hero-photo" src="hero.webp"
                alt="Rack de servidores del laboratorio con LEDs azules y cableado ordenado"
-               width="800" height="600" fetchpriority="high">
+               width="800" height="447" fetchpriority="high">
         </figure>
       </div>
     </section>
@@ -114,7 +115,7 @@
       </div>
     </section>
 
-    <section class="section columns" id="acerca-de-mi" aria-labelledby="titulo-acerca">
+    <section class="section" id="acerca-de-mi" aria-labelledby="titulo-acerca">
       <div>
         <h2 id="titulo-acerca">Acerca de mí</h2>
         <p class="nick"><a href="https://github.com/elarreglador" rel="me">@elarreglador</a> | David Moreno</p>
@@ -126,13 +127,20 @@
         </p>
         <div class="cta">
           <a class="btn btn-primary" href="https://github.com/elarreglador">Ver perfil en GitHub</a>
-          <a class="btn btn-secondary" href="https://github.com/elarreglador?tab=repositories">Repositorios</a>
-          <a class="btn btn-secondary" href="https://github.com/elarreglador/Curriculum">Currículum</a>
+          <a class="btn btn-primary" href="https://github.com/elarreglador?tab=repositories">Repositorios</a>
+          <a class="btn btn-primary" href="https://github.com/elarreglador/Curriculum">Currículum</a>
         </div>
       </div>
       <div>
         <h2>Acerca de ti</h2>
-        <p class="bio">Apartado disponible próximamente, esta es una tarea en proceso.</p>
+        <p class="bio" id="acerca-de-ti-lead">
+          Sé mucho de ti, quizá demasiado, pero el resto de webs también pueden saberlo — y no te lo dirán.
+        </p>
+        <button type="button" class="btn btn-primary" id="mostrar-mas-info" aria-expanded="false">Mostrar más info</button>
+        <div id="lectura-visitante" aria-live="polite"></div>
+        <noscript>
+          <p class="card" style="margin:0"><strong>Acerca de ti</strong> necesita JavaScript: sin él, no hay forma de leer su navegador.</p>
+        </noscript>
       </div>
     </section>
 
@@ -172,5 +180,6 @@
     <p>Sirviendo desde el cluster <a href="https://github.com/elarreglador/D-Lab">D-Lab</a> — Kubernetes · LXC · WireGuard</p>
     <p class="muted">© 2026 David Moreno</p>
   </footer>
+  <script type="module" src="acerca-de-ti.js"></script>
 </body>
 </html>

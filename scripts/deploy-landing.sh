@@ -11,18 +11,25 @@ if [[ ! -f "$LANDING/index.html" ]]; then
   exit 1
 fi
 
-MAX_BYTES=$((1024 * 1024))
+ETCD_LIMIT=$((1572864))    # default etcd max-request-bytes (1,5 MiB); el cluster no lo sobreescribe
+ABORT_B64=$((ETCD_LIMIT * 23 / 25))   # ~1,35 MiB: margen por overhead YAML + base64
+WARN_B64=$((921600))                 # ~0,9 MiB: aviso generoso antes del techo
+
 total_bytes=0
 while IFS= read -r -d '' f; do
   total_bytes=$((total_bytes + $(stat -c%s "$f")))
 done < <(find "$LANDING" -maxdepth 1 -type f ! -name '*.yaml' -print0)
+total_b64=$((total_bytes * 4 / 3))
 
-if (( total_bytes * 4 / 3 > MAX_BYTES )); then
-  echo "ERROR: el contenido de la web pesa $((total_bytes / 1024)) KB y superaría 1 MiB en base64 (límite de ConfigMap)." >&2
+echo "Contenido de la web: $((total_bytes / 1024)) KB (≈$((total_b64 / 1024)) KB en base64; techo efectivo ≈$((ETCD_LIMIT / 1024)) KB)"
+
+if (( total_b64 >= ABORT_B64 )); then
+  echo "ERROR: el contenido supera ~$((ABORT_B64 / 1024)) KB en base64 y rozaría el límite de etcd (~$((ETCD_LIMIT / 1024)) KB por objeto)." >&2
   echo "Consejo: migrar a imagen nginx custom (ver README, sección 'Web pública (landing)')." >&2
   exit 1
+elif (( total_b64 >= WARN_B64 )); then
+  echo "AVISO: cerca de $((WARN_B64 / 1024)) KB en base64; el ConfigMap empieza a ser grande para etcd." >&2
 fi
-echo "Contenido de la web: $((total_bytes / 1024)) KB (límite 1 MiB) — OK"
 
 {
   echo "apiVersion: v1"

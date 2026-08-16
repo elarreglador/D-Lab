@@ -30,7 +30,7 @@ Vault de documentación (Obsidian) + scripts de despliegue del laboratorio caser
 
 - Scripts en `scripts/`, ejecutados **desde la raíz del repo** (calculan `BASE` relativo).
 - Hacen `ssh "$KUBECTL_HOST"` (alias SSH por defecto `server`; override con env `KUBECTL_HOST`) y aplican manifiestos por stdin — no se necesita `kubectl` local.
-- `deploy-landing.sh`: `files/landing/` → ConfigMap `landing-html` (límite ~1 MiB; aborta antes de aplicar si se supera). Claves planas en `binaryData` base64 (ConfigMap no admite `/`).
+- `deploy-landing.sh`: `files/landing/` → ConfigMap `landing-html`. Claves planas en `binaryData` base64. Guard por bandas frente al techo de etcd (~1,5 MiB/objeto): avisa desde ~0,9 MiB y aborta cerca de ~1,35 MiB (no bloquea en 1 MiB).
 - Verificación manual: `curl` con código 200 y `kubectl get pods`. Sin tests automatizados.
 
 ## Documentación: fuentes de verdad

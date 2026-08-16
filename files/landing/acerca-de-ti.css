@@ -1,0 +1,251 @@
+/* Acerca de ti — dossier de huella digital del visitante.
+   Estilos integrados en el sistema de diseño del landing (variables de styles.css). */
+
+#lectura-visitante {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+/* ---------- cabeceras de acto ---------- */
+
+.act-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 1.1rem 0 0.45rem;
+}
+
+/* ---------- afirmaciones (claims) ---------- */
+
+.claim {
+  color: var(--text);
+  margin: 0 0 0.45rem;
+}
+
+.claim em {
+  font-style: normal;
+  font-weight: 650;
+  color: var(--accent);
+}
+
+.claim.c-likely { color: var(--text); }
+
+.claim.c-guess {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.claim.c-certain::before {
+  content: "✓ ";
+  color: var(--accent);
+  font-weight: 700;
+}
+
+@keyframes claim-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.claim-in {
+  opacity: 1;
+  animation: claim-in 0.28s ease-out;
+}
+
+/* ---------- botón «¿cómo?» y cajón de evidencia ---------- */
+
+.how-toggle {
+  display: inline;
+  margin-left: 0.4rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.how-toggle:hover {
+  text-decoration-color: currentColor;
+}
+
+.how {
+  margin: 0.2rem 0 0.9rem;
+  padding: 0.55rem 0.7rem;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  color: var(--text-muted);
+}
+
+.how[hidden] { display: none; }
+
+.how b { color: var(--text); }
+
+/* ---------- embudo de rareza ---------- */
+
+.funnel-row { margin-bottom: 0.6rem; }
+
+.funnel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  margin-bottom: 0.22rem;
+}
+
+.funnel-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.64rem;
+}
+
+.funnel-val { color: var(--text); font-weight: 700; }
+
+.funnel-bar {
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.funnel-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+}
+
+.funnel-meta {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-top: 0.18rem;
+}
+
+.funnel-cum { color: var(--accent); font-weight: 700; }
+
+/* ---------- recibo final ---------- */
+
+.verdict { color: var(--text); margin: 0 0 0.2rem; }
+
+.fingerprint {
+  font-family: var(--font-mono);
+  font-size: clamp(1.15rem, 4.5vw, 1.5rem);
+  letter-spacing: 0.05em;
+  line-height: 1.3;
+  color: var(--accent);
+  margin: 0.5rem 0 0.2rem;
+  word-break: break-all;
+}
+
+.bits {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  margin: 0 0 1rem;
+}
+
+/* ---------- datos en bruto ---------- */
+
+.raw {
+  width: 100%;
+  max-width: 100%;
+  margin: 0.6rem 0 1rem;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1.6;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.raw td {
+  padding: 0.08rem 0.7rem 0.08rem 0;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.raw td:first-child {
+  width: 38%;
+  padding-left: 0.7rem;
+  color: var(--text-muted);
+}
+
+.raw td:last-child { color: var(--text); }
+
+/* ---------- botones compactos ---------- */
+
+.mini-btn {
+  display: inline-block;
+  margin-top: 0.6rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.mini-btn:hover { border-color: var(--accent); }
+
+.mini-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.mini-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.mini-btn + .mini-btn { margin-left: 0.5rem; }
+
+/* botón «Mostrar más info», entre el lead y el dossier */
+#mostrar-mas-info {
+  margin: 0 0 1.4rem;
+}
+
+/* ---------- nota al pie ---------- */
+
+.dossier-note {
+  margin: 1.4rem 0 0;
+  font-family: var(--font-sans);
+  font-size: 1.05rem;
+  line-height: 1.65;
+  color: var(--text-muted);
+  max-width: 56ch;
+}
+
+.dossier-note a { color: var(--accent); }
+
+/* ---------- accesibilidad ---------- */
+
+@media (max-width: 560px) {
+  .fingerprint { font-size: 1.1rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .claim-in { animation: none; }
+}

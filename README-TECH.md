@@ -1618,12 +1618,12 @@ Si algún servicio futuro se protege con la clave web, la verificación será: `
 **Objetivo**: exponer `elarreglador.eu` (y `www.elarreglador.eu`) como página de presentación **pública, sin credenciales**, alojada dentro del cluster en pods Kubernetes.
 
 **Dónde se aloja**:
-- **Fuente de verdad**: repositorio, `files/landing/` (`index.html`, `styles.css`, `*.svg`, `*.webp`).
+- **Fuente de verdad**: repositorio, `files/landing/` (`index.html`, `styles.css`, `acerca-de-ti.css`, `acerca-de-ti.js`, `*.svg`, `*.webp`).
 - **En el cluster**: un **ConfigMap `landing-html`** (vive en etcd) con todos los ficheros; el Deployment monta ese ConfigMap (solo lectura) en `/usr/share/nginx/html/` de los pods `landing` (nginx:alpine, 2 réplicas). Los pods son efímeros: si caen, el Deployment los recrea y re-montan el contenido desde etcd.
 - **Ruta**: `elarreglador.eu`/`www` → Ingress `elarreglador-landing` → Service `landing` (ClusterIP:80) → pods nginx. Sin anotaciones de auth.
 
 **Características de la página**:
-- Solo **HTML + CSS** (CSS en fichero independiente `styles.css`), **sin JS ni assets externos**; imágenes locales (ficheros `.svg` y `.webp` servidos por el propio pod).
+- Solo **HTML + CSS + JS** (CSS y JS en ficheros independientes `styles.css`, `acerca-de-ti.css`, `acerca-de-ti.js`), **sin assets externos**; imágenes locales (ficheros `.svg` y `.webp` servidos por el propio pod). El acerca-de-ti (`acerca-de-ti.js`, ~77 KB) es una sección de live-fingerprinting del visitante: al cargar recopila las señales en segundo plano y el dossier permanece oculto hasta que se pulsa el botón **«Mostrar más info»** (azul), momento en que se pinta completo de una sola vez (afirmaciones, embudo, huella, tabla en bruto). Los cajones «¿cómo?» y la tabla en bruto nacen plegados (esta última tras su mini-botón), y el mismo botón azul vuelve a ocultar el dossier. Los fallos de esas sondas degradan con elegancia y nunca rompen la página.
 - **Fotografía generada por IA** (pollinations.ai, optimizada a WebP 800px, ~10 KB): `hero.webp` como foto del hero. Sin info sensible; se trata como el resto de la web. (Las anteriores `iot.webp`/`rack.webp`/`control.webp` se retiraron el 2026-08-01 por decisión del señor.)
 - **Tema heredado del sistema del visitante**: variables CSS con `prefers-color-scheme` (claro/oscuro) y `color-scheme: light dark`; las fotos se atenúan ligeramente en modo oscuro.
 - **Responsive** (grid `auto-fit`, `clamp()` en tipografías, media queries para móvil) y accesible (HTML semántico, `lang="es"`, `alt`, skip-link, `prefers-reduced-motion`).
@@ -1634,18 +1634,19 @@ Si algún servicio futuro se protege con la clave web, la verificación será: `
 ```bash
 ./scripts/deploy-landing.sh
 ```
-El script construye el ConfigMap `landing-html` desde `files/landing/` (claves planas: `index.html`, `styles.css`, `*.svg`, `*.webp` — ConfigMap no admite `/` en las claves). Todas las claves se escriben en `binaryData` (base64), incluidos los ficheros de texto, por simplicidad del generador; los pods las montan igualmente como ficheros. Aplica ConfigMap + Deployment/Service + Ingress vía `ssh server`, reiniciando los pods para forzar la carga del contenido.
+El script construye el ConfigMap `landing-html` desde `files/landing/` (claves planas: `index.html`, `styles.css`, `acerca-de-ti.*`, `*.svg`, `*.webp` — ConfigMap no admite `/` en las claves). Todas las claves se escriben en `binaryData` (base64), incluidos los ficheros de texto, por simplicidad del generador; los pods las montan igualmente como ficheros. Aplica ConfigMap + Deployment/Service + Ingress vía `ssh server`, reiniciando los pods para forzar la carga del contenido.
 
 **Verificación**:
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://elarreglador.eu    # 200 sin credenciales
 curl -s -o /dev/null -w '%{http_code}\n' https://www.elarreglador.eu # 200
 curl -s -o /dev/null -w '%{http_code}\n' https://elarreglador.eu/styles.css  # 200 (assets locales)
+curl -s -o /dev/null -w '%{http_code}\n' https://elarreglador.eu/acerca-de-ti.js # 200 (acerca-de-ti; verificado 2026-08-16)
 ```
 
 **Nota**: la imagen `nginx:alpine` stock requiere root (entrypoint y cachés), por lo que el pod no cumple el perfil PSA `restricted` (solo `warn` en este namespace; `enforce: baseline` sí se cumple). Para `restricted` habría que servir con imagen no-root (p. ej. puerto 8080 + usuario `nginx`), fuera de alcance para una landing estática.
 
-**Límite y fallback**: el ConfigMap no puede superar ~1 MiB. El script `deploy-landing.sh` aborta con un mensaje claro antes de aplicar si se supera (el contenido actual pesa ~25 KB). Si algún día la web creciera más allá del límite, se migra a **imagen nginx custom**: `Dockerfile` (nginx:alpine + `COPY` de `files/landing/`), build en DV0 con docker, importar en cada nodo (`docker save | lxc exec k8s-master-1 -- ctr images import`, idem workers) y `imagePullPolicy: IfNotPresent` en el Deployment.
+**Límite y fallback**: el ConfigMap no puede superar el límite de petición de etcd (~1,5 MiB por objeto; el cluster no define `--max-request-bytes`, así que aplica el default). El script `deploy-landing.sh` avisa desde ~0,9 MiB en base64 y aborta cerca del techo (~1,35 MiB, margen por overhead YAML) con un mensaje claro. Con el contenido actual (~149 KB en base64, verificado 2026-08-16) queda holgado. Si algún día la web creciera más allá del límite, se migra a **imagen nginx custom**: `Dockerfile` (nginx:alpine + `COPY` de `files/landing/`), build en DV0 con docker, importar en cada nodo (`docker save | lxc exec k8s-master-1 -- ctr images import`, idem workers) y `imagePullPolicy: IfNotPresent` en el Deployment.
 
 ---
 
