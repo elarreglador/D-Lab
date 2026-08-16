@@ -71,6 +71,9 @@ metadata:
   labels:
     app: jellyseerr
 spec:
+  type: LoadBalancer
+  loadBalancerIP: 192.168.1.54
+  externalTrafficPolicy: Local
   selector:
     app: jellyseerr
   ports:

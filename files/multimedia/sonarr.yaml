@@ -81,6 +81,9 @@ metadata:
   labels:
     app: sonarr
 spec:
+  type: LoadBalancer
+  loadBalancerIP: 192.168.1.55
+  externalTrafficPolicy: Local
   selector:
     app: sonarr
   ports:

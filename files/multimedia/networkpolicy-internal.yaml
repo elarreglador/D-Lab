@@ -1,32 +1,28 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: nodered-allow-ingress-nginx
-  namespace: pods
+  name: multimedia-internal
+  namespace: multimedia
 spec:
-  podSelector:
-    matchLabels:
-      app: nodered
+  podSelector: {}
   policyTypes:
     - Ingress
     - Egress
   ingress:
     - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: ingress-nginx
-      ports:
-        - protocol: TCP
-          port: 1880
+        - podSelector: {}
     - from:
         - ipBlock:
             cidr: 192.168.1.0/24
       ports:
         - protocol: TCP
-          port: 1880
+          port: 8989
+        - protocol: TCP
+          port: 7878
+        - protocol: TCP
+          port: 9696
+        - protocol: TCP
+          port: 8080
   egress:
     - to:
         - namespaceSelector:

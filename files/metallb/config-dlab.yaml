@@ -1,0 +1,17 @@
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: dlab-lan
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.168.1.50-192.168.1.64
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: dlab-lan
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - dlab-lan
