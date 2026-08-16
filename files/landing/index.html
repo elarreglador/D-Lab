@@ -108,6 +108,25 @@
       <h2 id="titulo-servicios">Servicios D-Lab</h2>
       <div class="cards">
         <article class="card">
+          <img class="card-icon" src="multimedia.svg" alt="" width="32" height="32">
+          <h3>Multimedia</h3>
+          <p class="card-config-title">Películas y series del cluster D-Lab</p>
+          <ul class="card-config">
+            <li><strong>Jellyfin</strong><a href="https://jellyfin.elarreglador.eu" target="_blank" rel="noopener">jellyfin.elarreglador.eu</a></li>
+            <li><strong>Jellyseerr</strong><a href="https://jellyseerr.elarreglador.eu" target="_blank" rel="noopener">jellyseerr.elarreglador.eu</a></li>
+          </ul>
+          <details>
+            <summary>Gestión interna (solo LAN 192.168.1.x)</summary>
+            <ul class="card-config" style="margin-top:.6rem">
+              <li><strong>Sonarr</strong><a href="http://192.168.1.55:8989" target="_blank" rel="noopener">192.168.1.55:8989</a></li>
+              <li><strong>Radarr</strong><a href="http://192.168.1.56:7878" target="_blank" rel="noopener">192.168.1.56:7878</a></li>
+              <li><strong>Prowlarr</strong><a href="http://192.168.1.57:9696" target="_blank" rel="noopener">192.168.1.57:9696</a></li>
+              <li><strong>qBittorrent</strong><a href="http://192.168.1.58:8080" target="_blank" rel="noopener">192.168.1.58:8080</a></li>
+            </ul>
+            <p class="muted" style="font-size:.85rem;opacity:.8;margin:.6rem 0 0">No accesibles desde Internet: solo desde la red local.</p>
+          </details>
+        </article>
+        <article class="card">
           <img class="card-icon" src="grafana.svg" alt="" width="32" height="32">
           <h3>Grafana</h3>
           <p>Monitorización y métricas del cluster D-Lab.</p>
@@ -128,12 +147,18 @@
           <img class="card-icon" src="radio.svg" alt="" width="32" height="32">
           <h3>Radio SDR remota</h3>
           <p>Recepción de radio en directo con GQRX (un cliente a la vez).</p>
-          <strong>Rango útil</strong> ~0,1–30 MHz (HF, vía upconverter Ham It Up)<br><br>
-          Configuracion GQRX:<br>
-            <strong>Device</strong> Other<br>
-            <strong>Device string</strong> rtl_tcp=sdr.elarreglador.eu:1234<br>
-            <strong>Input rate</strong> 960000<br>
-            <strong>LNB LO</strong> −125,000000 MHz<br>
+          <a href="https://sdr.elarreglador.eu:1234" target="_blank" rel="noopener">sdr.elarreglador.eu:1234</a>
+          <details>
+            <summary>Configuración GQRX</summary>
+            <ul class="card-config" style="margin-top:.6rem">
+              <li><strong>Rango útil</strong> ~0,1–30 MHz (HF, vía upconverter Ham It Up)</li>
+              <li><strong>Device</strong> Other</li>
+              <li><strong>Device string</strong> rtl_tcp=sdr.elarreglador.eu:1234</li>
+              <li><strong>Input rate</strong> 960000</li>
+              <li><strong>LNB LO</strong> −125,000000 MHz</li>
+            </ul>
+            <p class="muted" style="font-size:.85rem;opacity:.8;margin:.6rem 0 0">Una tasa real de 960000 evita saturar el enlace externo.</p>
+          </details>
         </article>
       </div>
     </section>

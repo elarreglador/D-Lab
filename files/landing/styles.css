@@ -339,6 +339,30 @@ h1 {
   text-decoration: underline;
 }
 
+.card details {
+  border-top: 1px solid var(--border);
+  margin-top: 0.4rem;
+  padding-top: 0.7rem;
+}
+
+.card details summary {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.3rem 0;
+  border-radius: 6px;
+}
+
+.card details summary:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.card details[open] summary {
+  color: var(--accent);
+}
+
 .pills {
   display: flex;
   flex-wrap: wrap;
