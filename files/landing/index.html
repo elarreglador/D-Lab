@@ -11,7 +11,7 @@
   <meta property="og:url" content="https://elarreglador.eu/">
   <meta property="og:title" content="David Moreno — Automatización · Infraestructura IoT · SRE">
   <meta property="og:description" content="Perfil híbrido entre electricidad y programación. Linux de vieja escuela, sistemas embebidos y fiabilidad de infraestructuras críticas.">
-  <link rel="icon" href="logo.svg" type="image/svg+xml">
+  <link rel="icon" href="dlab.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -20,87 +20,38 @@
   <header class="site-header">
     <nav class="nav" aria-label="Navegación principal">
       <a class="brand" href="https://elarreglador.eu/">
-        <img class="brand-mark" src="logo.svg" alt="" width="36" height="36">
-        <span>David Moreno</span>
+        <img class="brand-mark" src="dlab.svg" alt="" width="36" height="36">
+        <span>D-Lab</span>
       </a>
       <ul class="nav-links">
-        <li><a href="#perfil">Perfil</a></li>
-        <li><a href="#tecnologias">Tecnologías</a></li>
+        <li><a href="#dlab">D-Lab</a></li>
         <li><a href="#servicios">Servicios</a></li>
+        <li><a href="#acerca-de-mi">Acerca de mí</a></li>
         <li><a href="#contacto">Contacto</a></li>
       </ul>
     </nav>
   </header>
 
   <main id="contenido">
-    <section class="hero" id="perfil" aria-labelledby="titulo">
+    <section class="hero" id="dlab" aria-labelledby="titulo-dlab">
       <div class="hero-inner">
         <div class="hero-copy">
-          <h1 id="titulo">David Moreno</h1>
-          <p class="nick"><a href="https://github.com/elarreglador" rel="me">@elarreglador</a></p>
-          <p class="tagline">Automatización&nbsp;·&nbsp;Infraestructura&nbsp;IoT&nbsp;·&nbsp;SRE</p>
+          <h1 id="titulo-dlab">Proyecto D-Lab</h1>
           <p class="bio">
-            Perfil híbrido con base en electricidad y programación. Linux de vieja escuela, apasionado del
-            control de infraestructura, los sistemas embebidos y el <em>hardware hacking</em>. Actualmente
-            centrado en la orquestación de clusters en alta disponibilidad y la fiabilidad de sistemas críticos.
+            D-Lab es un pequeño centro de datos casero: dos Dell OptiPlex trabajando en equipo
+            para dar servicio 24/7, construido para aprender y experimentar con infraestructura real.
           </p>
-          <div class="cta">
-            <a class="btn btn-primary" href="https://github.com/elarreglador">Ver perfil en GitHub</a>
-            <a class="btn btn-secondary" href="https://github.com/elarreglador?tab=repositories">Repositorios</a>
-            <a class="btn btn-secondary" href="https://github.com/elarreglador/Curriculum">Currículum</a>
-          </div>
+          <p class="bio">
+            Los dos equipos se coordinan como un <em>cluster</em> y se vigilan a sí mismos; sobre
+            esa base corren los servicios personales —monitorización, automatización, base de datos
+            interna y otros— publicados bajo dominio propio con HTTPS.
+          </p>
         </div>
         <figure class="hero-figure">
           <img class="hero-photo" src="hero.webp"
                alt="Rack de servidores del laboratorio con LEDs azules y cableado ordenado"
                width="800" height="600" fetchpriority="high">
         </figure>
-      </div>
-    </section>
-
-    <section class="section" id="tecnologias" aria-labelledby="titulo-tecnologias">
-      <h2 id="titulo-tecnologias">Tecnologías</h2>
-      <div class="cards">
-        <article class="card">
-          <img class="card-icon" src="sre.svg" alt="" width="32" height="32">
-          <h3>Sistemas e Infraestructura</h3>
-          <ul class="pills">
-            <li>GNU/Linux</li>
-            <li>Bash</li>
-            <li>Kubernetes</li>
-            <li>LXC</li>
-          </ul>
-        </article>
-        <article class="card">
-          <img class="card-icon" src="iot.svg" alt="" width="32" height="32">
-          <h3>IoT y Automatización</h3>
-          <ul class="pills">
-            <li>Node-RED</li>
-            <li>Zigbee</li>
-            <li>MQTT</li>
-            <li>ESP32</li>
-          </ul>
-        </article>
-        <article class="card">
-          <img class="card-icon" src="dev.svg" alt="" width="32" height="32">
-          <h3>Desarrollo</h3>
-          <ul class="pills">
-            <li>C</li>
-            <li>Python</li>
-            <li>Java</li>
-            <li>Flutter</li>
-          </ul>
-        </article>
-        <article class="card">
-          <img class="card-icon" src="tools.svg" alt="" width="32" height="32">
-          <h3>Herramientas</h3>
-          <ul class="pills">
-            <li>Git / GitHub</li>
-            <li>VS Code</li>
-            <li>Android Studio</li>
-            <li>Warp</li>
-          </ul>
-        </article>
       </div>
     </section>
 
@@ -160,6 +111,28 @@
             <p class="muted" style="font-size:.85rem;opacity:.8;margin:.6rem 0 0">Una tasa real de 960000 evita saturar el enlace externo.</p>
           </details>
         </article>
+      </div>
+    </section>
+
+    <section class="section columns" id="acerca-de-mi" aria-labelledby="titulo-acerca">
+      <div>
+        <h2 id="titulo-acerca">Acerca de mí</h2>
+        <p class="nick"><a href="https://github.com/elarreglador" rel="me">@elarreglador</a> | David Moreno</p>
+        <p class="tagline">Automatización&nbsp;·&nbsp;Infraestructura&nbsp;IoT&nbsp;·&nbsp;SRE</p>
+        <p class="bio">
+          Perfil híbrido con base en electricidad y programación. Linux de vieja escuela, apasionado del
+          control de infraestructura, los sistemas embebidos y el <em>hardware hacking</em>. Actualmente
+          centrado en la orquestación de clusters en alta disponibilidad y la fiabilidad de sistemas críticos.
+        </p>
+        <div class="cta">
+          <a class="btn btn-primary" href="https://github.com/elarreglador">Ver perfil en GitHub</a>
+          <a class="btn btn-secondary" href="https://github.com/elarreglador?tab=repositories">Repositorios</a>
+          <a class="btn btn-secondary" href="https://github.com/elarreglador/Curriculum">Currículum</a>
+        </div>
+      </div>
+      <div>
+        <h2>Acerca de ti</h2>
+        <p class="bio">Apartado disponible próximamente, esta es una tarea en proceso.</p>
       </div>
     </section>
 

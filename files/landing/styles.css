@@ -216,6 +216,10 @@ h1 {
   margin: 0 0 1.8rem;
 }
 
+#dlab .bio {
+  max-width: none;
+}
+
 .cta {
   display: flex;
   flex-wrap: wrap;
@@ -266,6 +270,12 @@ h1 {
   font-size: clamp(1.4rem, 3.5vw, 1.8rem);
   margin: 0 0 1.6rem;
   letter-spacing: -0.01em;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space);
 }
 
 .cards {
@@ -443,6 +453,10 @@ h1 {
   .hero-copy .bio {
     margin-left: auto;
     margin-right: auto;
+  }
+
+  .columns {
+    grid-template-columns: 1fr;
   }
 }
 
