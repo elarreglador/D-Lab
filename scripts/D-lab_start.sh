@@ -249,6 +249,23 @@ wait_workloads() {
   $SSH "$KUBECTL_HOST" "kubectl get pods -A -o wide"
 }
 
+wait_multimedia_workloads() {
+  local failed=()
+  log "Esperando workloads multimedia (rollout status)..."
+  local app
+  for app in flaresolverr prowlarr sonarr radarr qbittorrent jellyfin jellyseerr; do
+    if ! $SSH "$KUBECTL_HOST" "kubectl -n multimedia rollout status deployment/$app --timeout=180s" >/dev/null 2>&1; then
+      failed+=("multimedia/$app")
+    fi
+  done
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    echo "ERROR: deployments multimedia sin completar el rollout:" >&2
+    printf '       - %s\n' "${failed[@]}" >&2
+    exit 1
+  fi
+  ok "Workloads multimedia listos (7 deployments)"
+}
+
 http_check() {
   local url=$1
   local code
@@ -262,6 +279,8 @@ check_public() {
   http_check "https://www.elarreglador.eu"
   http_check "https://grafana.elarreglador.eu"
   http_check "https://nodered.elarreglador.eu"
+  http_check "https://jellyseerr.elarreglador.eu"
+  http_check "https://jellyfin.elarreglador.eu"
 }
 
 main() {
@@ -303,6 +322,8 @@ main() {
   verify_storage
   echo
   wait_workloads
+  echo
+  wait_multimedia_workloads
   echo
   check_public
   echo

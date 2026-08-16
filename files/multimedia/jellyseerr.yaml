@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jellyseerr
+  namespace: multimedia
+  labels:
+    app: jellyseerr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jellyseerr
+  template:
+    metadata:
+      labels:
+        app: jellyseerr
+    spec:
+      securityContext:
+        fsGroup: 1000
+      nodeSelector:
+        kubernetes.io/hostname: k8s-worker-2
+      containers:
+        - name: jellyseerr
+          image: fallenbagel/jellyseerr:latest
+          ports:
+            - containerPort: 5055
+          env:
+            - name: TZ
+              value: Europe/Madrid
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /
+              port: 5055
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 5055
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 5055
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            # Jellyseerr (fallenbagel/jellyseerr) almacena su config en /app/config,
+            # NO en /config. Montar el PV aquí lo hace persistente entre reinicios.
+            - name: config
+              mountPath: /app/config
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: jellyseerr-config-local
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jellyseerr
+  namespace: multimedia
+  labels:
+    app: jellyseerr
+spec:
+  selector:
+    app: jellyseerr
+  ports:
+    - port: 5055
+      targetPort: 5055

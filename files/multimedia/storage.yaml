@@ -1,0 +1,339 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: media-data
+  namespace: multimedia
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 400Gi
+  storageClassName: nfs-storage-v4
+---
+# PVs locales estáticos para las configuraciones por app (BDs SQLite + ajustes).
+# Motivo: SQLite sobre NFS (GlusterFS) sufre "database is locked" intermitente que
+# crash-loopea las apps .NET (Sonarr/Radarr). El almacenamiento local vive en el
+# LXC de cada nodo en /srv/k8s-local/<app>. Pods de réplica única: cada uno queda
+# fijado a su nodo vía nodeSelector en el Deployment + nodeAffinity del PV.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-sonarr-config
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-static
+  local:
+    path: /srv/k8s-local/sonarr
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-worker-1
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-radarr-config
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-static
+  local:
+    path: /srv/k8s-local/radarr
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-worker-2
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-prowlarr-config
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  capacity:
+    storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-static
+  local:
+    path: /srv/k8s-local/prowlarr
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-worker-1
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-qbittorrent-config
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-static
+  local:
+    path: /srv/k8s-local/qbittorrent
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-master-1
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-jellyfin-config
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-static
+  local:
+    path: /srv/k8s-local/jellyfin
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-worker-2
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-jellyseerr-config
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  capacity:
+    storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-static
+  local:
+    path: /srv/k8s-local/jellyseerr
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-worker-2
+---
+# PVCs locales por app. RWO y réplica única: cada app vive en su nodo.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sonarr-config-local
+  namespace: multimedia
+  labels:
+    app: sonarr
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-static
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: radarr-config-local
+  namespace: multimedia
+  labels:
+    app: radarr
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-static
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prowlarr-config-local
+  namespace: multimedia
+  labels:
+    app: prowlarr
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-static
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qbittorrent-config-local
+  namespace: multimedia
+  labels:
+    app: qbittorrent
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-static
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-config-local
+  namespace: multimedia
+  labels:
+    app: jellyfin
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-static
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyseerr-config-local
+  namespace: multimedia
+  labels:
+    app: jellyseerr
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-static
+---
+# PVCs NFS legados (ya no usados; conservados para referencia/rollback).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sonarr-config
+  namespace: multimedia
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: nfs-storage-v4
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: radarr-config
+  namespace: multimedia
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: nfs-storage-v4
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prowlarr-config
+  namespace: multimedia
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: nfs-storage-v4
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qbittorrent-config
+  namespace: multimedia
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: nfs-storage-v4
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-config
+  namespace: multimedia
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: nfs-storage-v4
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyseerr-config
+  namespace: multimedia
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: nfs-storage-v4

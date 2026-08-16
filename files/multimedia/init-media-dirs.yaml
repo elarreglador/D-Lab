@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: init-media-dirs
+  namespace: multimedia
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: multimedia
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mkdir
+          image: busybox:1.36
+          command: ["sh", "-c", "mkdir -p /data/torrents/movies /data/torrents/tv /data/media/movies /data/media/tv && chown -R 1000:1000 /data/torrents /data/media && find /data/torrents /data/media -type d -exec chmod 775 {} + && find /data/torrents /data/media -type f -exec chmod 664 {} + && chmod 775 /data/torrents /data/media"]
+          volumeMounts:
+            - name: media
+              mountPath: /data
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: media-data

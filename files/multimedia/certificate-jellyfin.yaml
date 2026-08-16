@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: jellyfin-elarreglador-eu
+  namespace: multimedia
+spec:
+  commonName: jellyfin.elarreglador.eu
+  dnsNames:
+    - jellyfin.elarreglador.eu
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt-http
+  secretName: jellyfin-elarreglador-eu-tls
