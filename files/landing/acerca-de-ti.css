@@ -15,7 +15,7 @@
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent2);
   margin: 1.1rem 0 0.45rem;
 }
 
@@ -222,7 +222,7 @@
 
 .mini-btn + .mini-btn { margin-left: 0.5rem; }
 
-/* botón «Mostrar más info», entre el lead y el dossier */
+/* botón «Mostrar TU info», entre el lead y el dossier */
 #mostrar-mas-info {
   margin: 0 0 1.4rem;
 }
@@ -232,8 +232,9 @@
 .dossier-note {
   margin: 1.4rem 0 0;
   font-family: var(--font-sans);
-  font-size: 1.05rem;
-  line-height: 1.65;
+  font-size: 1.15rem;
+  font-weight: 500;
+  line-height: 1.7;
   color: var(--text-muted);
   max-width: 56ch;
 }

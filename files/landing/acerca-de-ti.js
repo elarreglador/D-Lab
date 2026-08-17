@@ -1223,12 +1223,6 @@
       addClaim(`Y tiene *más de una pantalla* conectada.`,
         `screen.isExtended devuelve true cuando hay un segundo monitor, sin permiso y sin decir qué se está viendo en él.`, 'certain');
     }
-    const bat = num('hw.battery');
-    if (typeof bat === 'number') {
-      const charging = signals['hw.charging']?.value;
-      addClaim(`El navegador lee su batería al *${Math.round(bat * 100)}%*${charging ? ', enchufada' : ''}.`,
-        `navigator.getBattery informa del nivel incluso sin permiso explícito en algunos navegadores, pero es notoriamente impreciso: redondea y, enchufado, suele reportar 100% aunque el sistema indique algo menos (p. ej. ~97%).\nReportado: ${Math.round(bat * 100)}% · Cargando: ${charging ? 'sí' : 'no'}`);
-    }
     const cams = num('hw.cameras');
     const mics = num('hw.mics');
     const labels = signals['hw.labels']?.value === true;
@@ -1240,15 +1234,9 @@
         `enumerateDevices() revela qué tipos de dispositivo hay sin permiso; los nombres concretos solo aparecen si algún día concedió acceso de dispositivo a esta web u otra.`);
     }
     const netKind = signals['hw.netKind']?.value;
-    const netType = signals['hw.netType']?.value;
-    if (netKind || netType) {
-      if (netKind) {
-        addClaim(`Navega por *${esc(netKind)}*${typeof num('hw.downlink') === 'number' ? ` (el navegador estima ~${num('hw.downlink')} Mbps)` : ''}.`,
-          `navigator.connection.type informa del medio físico (ethernet, wifi, cellular) sin permiso.\nRTT: ${num('hw.rtt') != null ? `${num('hw.rtt')} ms` : 'no divulgado'}`);
-      } else {
-        addClaim(`El navegador clasifica su conexión en la categoría *${esc(netType)}* — la más rápida de su escala, no necesariamente una red móvil.`,
-          `navigator.connection.effectiveType es una heurística del navegador sobre velocidad, no el tipo de red real: en una línea fija devuelve casi siempre «4g» por ser el tramo superior. downlink y RTT son estimaciones toscas.\nRTT: ${num('hw.rtt') != null ? `${num('hw.rtt')} ms` : 'no divulgado'}`);
-      }
+    if (netKind) {
+      addClaim(`Navega por *${esc(netKind)}*${typeof num('hw.downlink') === 'number' ? ` (el navegador estima ~${num('hw.downlink')} Mbps)` : ''}.`,
+        `navigator.connection.type informa del medio físico (ethernet, wifi, cellular) sin permiso.\nRTT: ${num('hw.rtt') != null ? `${num('hw.rtt')} ms` : 'no divulgado'}`);
     }
   }
 
@@ -1591,7 +1579,7 @@
   }
 
   const showAllBtn = document.getElementById('mostrar-mas-info');
-  const BTN_SHOW = 'Mostrar más info';
+  const BTN_SHOW = 'Mostrar TU info';
   const BTN_HIDE = 'Ocultar la información';
   let shown = false;
   let rendered = false;

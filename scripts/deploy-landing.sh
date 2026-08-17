@@ -46,7 +46,10 @@ fi
   cat "$LANDING/landing.yaml"
   echo "---"
   cat "$LANDING/landing-ingress.yaml"
-} | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+# --server-side: con client-side apply, el contenido del ConfigMap (~300 KB base64) se
+# duplica en la anotación kubectl.kubernetes.io/last-applied-configuration y supera su
+# límite de 256 KiB. Server-side apply guarda solo managedFields, sin duplicar los datos.
+} | ssh "$KUBECTL_HOST" "kubectl apply --server-side -f -"
 
 echo
 echo "OK: ConfigMap '$CONFIGMAP' + Deployment/Service 'landing' + Ingress 'elarreglador-landing' aplicados"

@@ -1,33 +1,90 @@
+/* ============================================================
+   Estética «GitHub» (sistema de diseño Primer): plana, neutra,
+   tipografías de sistema, acentos azul y verde. Sin assets externos.
+   ============================================================ */
 :root {
-  color-scheme: light dark;
-  --bg: #f5f6f8;
-  --bg-gradient: radial-gradient(1200px 600px at 20% -10%, rgba(37, 99, 235, 0.10), transparent 60%),
-                 radial-gradient(1000px 500px at 90% 10%, rgba(6, 182, 212, 0.10), transparent 55%);
-  --surface: #ffffff;
-  --text: #191d24;
-  --text-muted: #5b6472;
-  --accent: #2563eb;
-  --accent-soft: rgba(37, 99, 235, 0.10);
-  --border: #e3e6eb;
-  --shadow: 0 10px 30px rgba(16, 24, 40, 0.08);
-  --radius: 16px;
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  color-scheme: dark;
+  --radius: 6px;
+  --font-display: system-ui, -apple-system, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --space: 2.5rem;
+
+  /* Paleta OSCURA (GitHub dark: #0d1117) */
+  --bg: #0d1117;
+  --surface: #161b22;
+  --bar-bg: #161b22;
+  --bar-fg: #f0f6fc;
+  --bar-accent: #58a6ff;
+  --surface-soft: rgba(13, 17, 23, 0.85);
+  --text: #f0f6fc;
+  --text-muted: #9198a1;
+  --accent: #2f81f7;
+  --accent-hover: #1f6feb;
+  --accent-soft: rgba(56, 139, 253, 0.15);
+  --accent-glow: transparent;
+  --accent2: #3fb950;
+  --accent2-soft: rgba(63, 185, 80, 0.15);
+  --accent2-glow: transparent;
+  --border: #30363d;
+  --border-bar: #7c8094;
+  --shadow: none;
+  --text-glow: none;
+  --btn-bg: #21262d;
+  --btn-bg-hover: #30363d;
+  --btn-text: #ffffff;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1116;
-    --bg-gradient: radial-gradient(1200px 600px at 20% -10%, rgba(96, 165, 250, 0.12), transparent 60%),
-                   radial-gradient(1000px 500px at 90% 10%, rgba(34, 211, 238, 0.10), transparent 55%);
-    --surface: #161b23;
-    --text: #e8eaf0;
-    --text-muted: #98a1b0;
-    --accent: #60a5fa;
-    --accent-soft: rgba(96, 165, 250, 0.14);
-    --border: #272d38;
-    --shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+/* Modo claro (GitHub light), solo con el conmutador manual */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --bar-bg: #161b22;
+  --bar-fg: #f0f6fc;
+  --bar-accent: #58a6ff;
+  --surface-soft: rgba(255, 255, 255, 0.85);
+  --text: #1f2328;
+  --text-muted: #59636e;
+  --accent: #0969da;
+  --accent-hover: #0860ca;
+  --accent-soft: #ddf4ff;
+  --accent-glow: transparent;
+  --accent2: #1a7f37;
+  --accent2-soft: rgba(26, 127, 55, 0.12);
+  --accent2-glow: transparent;
+  --border: #d0d7de;
+  --border-bar: #7c8094;
+  --shadow: none;
+  --text-glow: none;
+  --btn-bg: #f6f8fa;
+  --btn-bg-hover: #eef1f4;
+  --btn-text: #ffffff;
+}
+
+/* Sin JS: seguir al sistema (misma paleta clara) */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --surface-soft: rgba(255, 255, 255, 0.85);
+    --text: #1f2328;
+    --text-muted: #59636e;
+    --accent: #0969da;
+    --accent-hover: #0860ca;
+    --accent-soft: #ddf4ff;
+    --accent-glow: transparent;
+    --accent2: #1a7f37;
+    --accent2-soft: rgba(26, 127, 55, 0.12);
+    --accent2-glow: transparent;
+    --border: #d0d7de;
+  --border-bar: #7c8094;
+    --shadow: none;
+    --text-glow: none;
+    --btn-bg: #f6f8fa;
+    --btn-bg-hover: #eef1f4;
+    --btn-text: #ffffff;
   }
 }
 
@@ -45,13 +102,17 @@ body {
   display: flex;
   flex-direction: column;
   background-color: var(--bg);
-  background-image: var(--bg-gradient);
-  background-repeat: no-repeat;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 1rem;
-  line-height: 1.65;
+  font-weight: 400;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent);
+  color: #ffffff;
 }
 
 a {
@@ -65,7 +126,7 @@ a:hover {
 
 :focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 3px;
+  outline-offset: 2px;
   border-radius: 4px;
 }
 
@@ -76,7 +137,7 @@ a:hover {
   background: var(--accent);
   color: #ffffff;
   padding: 0.6rem 1rem;
-  border-radius: 0 0 8px 0;
+  border-radius: 0 0 6px 0;
   z-index: 10;
 }
 
@@ -88,10 +149,9 @@ a:hover {
   position: sticky;
   top: 0;
   z-index: 5;
-  background: color-mix(in srgb, var(--bg) 96%, transparent);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--border);
-  box-shadow: 0 1px 0 rgba(16, 24, 40, 0.04);
+  background: var(--bar-bg);
+  color: var(--bar-fg);
+  border-bottom: 1px solid var(--border-bar);
 }
 
 .nav {
@@ -108,32 +168,74 @@ a:hover {
   display: inline-flex;
   align-items: center;
   gap: 0.6rem;
-  color: var(--text);
-  font-weight: 650;
+  color: var(--bar-fg);
+  font-weight: 600;
+  font-size: 1rem;
 }
 
 .brand-mark {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
 }
 
 .nav-links {
   display: flex;
   gap: 1.4rem;
   list-style: none;
-  margin: 0;
+  margin: 0 0 0 auto;
   padding: 0;
 }
 
 .nav-links a {
-  color: var(--text-muted);
-  font-weight: 500;
+  color: var(--bar-fg);
+  font-weight: 400;
+  font-size: 0.9rem;
 }
 
 .nav-links a:hover {
-  color: var(--text);
+  color: var(--bar-accent);
   text-decoration: none;
+}
+
+/* Conmutador manual de tema (comportamiento sin cambios) */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border-bar);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--bar-fg);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.theme-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--bar-accent);
+  border-color: var(--bar-fg);
+}
+
+.theme-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.theme-toggle .icon-moon {
+  display: none;
+}
+
+.theme-toggle[aria-pressed="true"] .icon-moon {
+  display: block;
+}
+
+.theme-toggle[aria-pressed="true"] .icon-sun {
+  display: none;
 }
 
 main {
@@ -143,7 +245,7 @@ main {
 .hero {
   max-width: 960px;
   margin: 0 auto;
-  padding: clamp(3rem, 10vw, 6rem) var(--space) 2rem;
+  padding: clamp(3rem, 10vw, 6rem) var(--space) 2.5rem;
 }
 
 .hero-inner {
@@ -165,30 +267,26 @@ main {
   display: block;
   width: 100%;
   height: auto;
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  border-radius: 6px;
+  border: 1px solid var(--border);
 }
 
-@media (prefers-color-scheme: dark) {
-  .hero-photo {
-    filter: brightness(0.92) contrast(1.04);
-  }
-}
-
-.hero-copy h1:first-child {
-  margin-top: 0;
+/* Título a ancho completo sobre la columna doble (evita el salto de línea) */
+.hero h1 {
+  margin: 0 0 1.4rem;
 }
 
 h1 {
   margin: 1.4rem 0 0.4rem;
-  font-size: clamp(2.2rem, 6vw, 3.2rem);
-  line-height: 1.15;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  font-size: clamp(2rem, 6vw, 2.8rem);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
 }
 
 .nick {
   font-family: var(--font-mono);
-  font-size: 1.05rem;
+  font-size: 0.9rem;
   color: var(--text-muted);
   margin: 0 0 0.6rem;
 }
@@ -204,8 +302,9 @@ h1 {
 
 .tagline {
   font-family: var(--font-mono);
-  font-size: clamp(0.9rem, 2.5vw, 1.05rem);
+  font-size: 0.85rem;
   color: var(--accent);
+  letter-spacing: 0.02em;
   margin: 0 0 1.2rem;
 }
 
@@ -231,42 +330,40 @@ h1 {
 
 .btn {
   display: inline-block;
-  padding: 0.7rem 1.4rem;
-  border-radius: 999px;
-  font-weight: 600;
+  padding: 0.55rem 1.2rem;
+  border-radius: 6px;
+  font-weight: 500;
   font-size: 0.95rem;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  background: var(--btn-bg);
+  color: var(--text);
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 button.btn {
-  border: 0;
-  font-family: inherit;
-  line-height: inherit;
+  line-height: 1.5;
   cursor: pointer;
 }
 
 .btn:hover {
-  transform: translateY(-1px);
   text-decoration: none;
+}
+
+.btn-secondary:hover {
+  background: var(--btn-bg-hover);
+  border-color: var(--text-muted);
 }
 
 .btn-primary {
   background: var(--accent);
+  border-color: var(--accent);
   color: #ffffff;
 }
 
 .btn-primary:hover {
-  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 40%, transparent);
-}
-
-.btn-secondary {
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-}
-
-.btn-secondary:hover {
-  border-color: var(--accent);
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 .section {
@@ -276,28 +373,32 @@ button.btn {
 }
 
 .section h2 {
-  font-size: clamp(1.4rem, 3.5vw, 1.8rem);
-  margin: 0 0 1.6rem;
-  letter-spacing: -0.01em;
+  font-weight: 600;
+  font-size: clamp(1.25rem, 3.5vw, 1.5rem);
+  margin: 0 0 1.4rem;
+  letter-spacing: 0.01em;
+}
+
+/* Bloques hermanos dentro de una sección: mismo ritmo vertical que la cabecera de sección */
+.section > div + div {
+  margin-top: 2.5rem;
 }
 
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 1.2rem;
+  gap: 1rem;
 }
 
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 6px;
   padding: 1.4rem;
-  box-shadow: var(--shadow);
-  transition: transform 0.15s ease, border-color 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 
 .card:hover {
-  transform: translateY(-2px);
   border-color: var(--accent);
 }
 
@@ -309,13 +410,14 @@ button.btn {
 }
 
 .card h3 {
+  font-weight: 600;
   font-size: 1.05rem;
   margin: 0 0 0.9rem;
 }
 
 .card p {
   color: var(--text-muted);
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   margin: 0 0 1rem;
 }
 
@@ -327,7 +429,7 @@ button.btn {
   list-style: none;
   margin: 0 0 1rem;
   padding: 0;
-  font-size: 0.88rem;
+  font-size: 0.9rem;
   color: var(--text-muted);
 }
 
@@ -343,7 +445,7 @@ button.btn {
 
 .card a {
   color: var(--accent);
-  font-weight: 550;
+  font-weight: 500;
   font-size: 0.92rem;
   word-break: break-word;
 }
@@ -361,7 +463,7 @@ button.btn {
 .card details summary {
   color: var(--text-muted);
   font-size: 0.85rem;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
   padding: 0.3rem 0;
   border-radius: 6px;
@@ -389,15 +491,16 @@ button.btn {
   background: var(--accent-soft);
   color: var(--accent);
   font-size: 0.82rem;
-  font-weight: 550;
+  font-weight: 500;
   padding: 0.28rem 0.7rem;
   border-radius: 999px;
+  border: 1px solid var(--border);
 }
 
 .contact {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 0.8rem;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -406,32 +509,39 @@ button.btn {
 .contact a {
   display: inline-flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.5rem;
   color: var(--text);
-  font-weight: 550;
+  font-weight: 500;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 0.6rem 1.1rem;
-  transition: transform 0.15s ease, border-color 0.15s ease;
+  border-radius: 6px;
+  padding: 0.55rem 1.1rem;
+  transition: transform 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .contact a:hover {
   transform: translateY(-1px);
   border-color: var(--accent);
+  color: var(--accent);
   text-decoration: none;
-}
-
-.contact img {
-  color: var(--text);
 }
 
 .site-footer {
   text-align: center;
-  color: var(--text-muted);
-  border-top: 1px solid var(--border);
-  padding: 1.8rem var(--space);
+  color: var(--bar-fg);
+  border-top: 1px solid var(--border-bar);
+  background: var(--bar-bg);
+  padding: 1.6rem var(--space) 1.4rem;
   font-size: 0.9rem;
+}
+
+.site-footer p a {
+  color: var(--bar-accent);
+}
+
+.site-footer .contact {
+  justify-content: center;
+  margin: 0 0 1.2rem;
 }
 
 .site-footer .muted {
