@@ -1,17 +1,21 @@
 #!/bin/bash
-# Fija la política de idioma de las descargas de Sonarr/Radarr: castellano.
+# Fija la política de idioma de las descargas de Sonarr/Radarr: castellano + fallback inglés.
 #
-# Jerarquía (minFormatScore=100; score por release, se elige el mayor):
-#   1º  Doblado castellano + audio dual en inglés + subtítulos   110+110+100
-#   2º  Doblado castellano + audio dual en inglés                110+110
+# Jerarquía (minFormatScore=1; score por release, se elige el mayor):
+#   1º  Doblado castellano + audio dual en inglés + subtítulos   110+110+100 = 320
+#   2º  Doblado castellano + audio dual en inglés                110+110     = 220
 #   3º  Doblado castellano (solo)                                110
 #   4º  VOSE (subtítulos), fallback si no hay doblaje           100
-#   —   Inglés sin subtítulos                                    0 -> rechazado
+#   5º  Inglés + subtítulos (fallback penúltimo)                 50 (+1 base = 51)
+#   6º  Inglés sin subtítulos (fallback último recurso)           1
+#   —   Sin match de idioma                                      0 -> rechazado
 #
-# 3 Custom Formats por app (Sonarr/Radarr):
+# 5 Custom Formats por app (Sonarr/Radarr):
 #   "Español (Audio)"      LanguageSpecification = Spanish (castellano, NO Latino)
 #   "Audio dual"           ReleaseTitleSpecification (regex dual/multi/es-en)
 #   "VOSE"                 ReleaseTitleSpecification (regex subtítulos)
+#   "Inglés (con subs)"    ReleaseTitleSpecification (regex inglés + subs)
+#   "Inglés (sin subs)"    ReleaseTitleSpecification (regex inglés)
 # El CF "VOSE" no exige idioma a propósito: los releases `...-VOSE`/`SUBBED`/`VOS`
 # se parsean a menudo como idioma "Unknown" (no inglés) y exigirlo los dejaría sin
 # puntuar. Al ser solo regex de título, puntúa cualquier release con etiqueta de
@@ -30,7 +34,9 @@
 #   S_DUB   (110)  score del CF "Español (Audio)"
 #   S_DUAL  (110)  score del CF "Audio dual"
 #   S_VOSE  (100)  score del CF "VOSE"
-#   MIN     (100)  minFormatScore del perfil
+#   S_ENG   (50)   score del CF "Inglés (con subs)"
+#   S_ENG0  (1)    score del CF "Inglés (sin subs)"
+#   MIN     (1)    minFormatScore del perfil
 #
 # Credenciales: se cargan solas desde info_sensible/multimedia.env (gitignored).
 
@@ -44,7 +50,9 @@ VERBOSE="${VERBOSE:-1}"
 S_DUB="${S_DUB:-110}"
 S_DUAL="${S_DUAL:-110}"
 S_VOSE="${S_VOSE:-100}"
-MIN="${MIN:-100}"
+S_ENG="${S_ENG:-50}"
+S_ENG0="${S_ENG0:-1}"
+MIN="${MIN:-1}"
 
 # Carga automática de credenciales (info_sensible/multimedia.env, gitignored).
 if [ -f "$BASE/info_sensible/multimedia.env" ]; then
@@ -170,6 +178,8 @@ print(langs.get("Spanish",""),langs.get("English",""))
   SPEC_DUB="[{\"name\":\"Idioma: Español\",\"implementation\":\"LanguageSpecification\",\"implementationName\":\"Language\",\"infoLink\":\"$info_link\",\"negate\":false,\"required\":false,\"fields\":[{\"name\":\"value\",\"value\":$ES_ID},{\"name\":\"exceptLanguage\",\"value\":false}]}]"
   SPEC_DUAL="[{\"name\":\"Release dual\",\"implementation\":\"ReleaseTitleSpecification\",\"implementationName\":\"Release Title\",\"infoLink\":\"$info_link\",\"negate\":false,\"required\":false,\"fields\":[{\"name\":\"value\",\"value\":\"\\\\b(dual|multi)\\\\b|\\\\b(?:es|esp)[-_.](?:en|eng)\\\\b|\\\\bcastellano\\\\b.*\\\\bingl[ée]s\\\\b\"}]}]"
   SPEC_VOSE="[{\"name\":\"Subtítulos\",\"implementation\":\"ReleaseTitleSpecification\",\"implementationName\":\"Release Title\",\"infoLink\":\"$info_link\",\"negate\":false,\"required\":false,\"fields\":[{\"name\":\"value\",\"value\":\"\\\\b(?:vose|voe|subs?|subbed|subtitled|subtitulad[oa]s?)\\\\b\"}]}]"
+  SPEC_ENG="[{\"name\":\"Inglés + subs\",\"implementation\":\"ReleaseTitleSpecification\",\"implementationName\":\"Release Title\",\"infoLink\":\"$info_link\",\"negate\":false,\"required\":false,\"fields\":[{\"name\":\"value\",\"value\":\"\\\\b(?:eng|english)\\\\b.*\\\\b(?:subs?|subbed|subtitled|srt|ass|ssa|vtt)\\\\b|\\\\b(?:subs?|subbed|subtitled)\\\\b.*\\\\b(?:eng|english)\\\\b|\\\\.(?:en|eng)\\\\.(?:srt|sub|ass|ssa|vtt)\\\\b\"}]}]"
+  SPEC_ENG0="[{\"name\":\"Inglés base\",\"implementation\":\"ReleaseTitleSpecification\",\"implementationName\":\"Release Title\",\"infoLink\":\"$info_link\",\"negate\":false,\"required\":false,\"fields\":[{\"name\":\"value\",\"value\":\"\\\\b(?:eng|english)\\\\b\"}]}]"
 
   CF_DUB="$(ensure_cf "$app" "$port" "$key" "Español (Audio)" "$SPEC_DUB")"
   echo "  -> CF 'Español (Audio)' id $CF_DUB (score $S_DUB)"
@@ -177,6 +187,10 @@ print(langs.get("Spanish",""),langs.get("English",""))
   echo "  -> CF 'Audio dual' id $CF_DUAL (score $S_DUAL)"
   CF_VOSE="$(ensure_cf "$app" "$port" "$key" "VOSE" "$SPEC_VOSE")"
   echo "  -> CF 'VOSE' id $CF_VOSE (score $S_VOSE)"
+  CF_ENG="$(ensure_cf "$app" "$port" "$key" "Inglés (con subs)" "$SPEC_ENG")"
+  echo "  -> CF 'Inglés (con subs)' id $CF_ENG (score $S_ENG)"
+  CF_ENG0="$(ensure_cf "$app" "$port" "$key" "Inglés (sin subs)" "$SPEC_ENG0")"
+  echo "  -> CF 'Inglés (sin subs)' id $CF_ENG0 (score $S_ENG0)"
 
   # 3) Perfil "Any": puntuar los CFs y fijar minFormatScore (idempotente)
   PROF="$(KCURL "http://$app:$port/api/v3/qualityprofile" -H "X-Api-Key: $key" 2>/dev/null | python3 -c '
@@ -190,7 +204,7 @@ except Exception:
 ')"
   [ "$PROF" != "{}" ] || die "$app: no se pudo leer el perfil de calidad"
   P_ID="$(printf '%s' "$PROF" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))")"
-  T_DUB="Español (Audio):$CF_DUB:$S_DUB"; T_DUAL="Audio dual:$CF_DUAL:$S_DUAL"; T_VOSE="VOSE:$CF_VOSE:$S_VOSE"
+  T_DUB="Español (Audio):$CF_DUB:$S_DUB"; T_DUAL="Audio dual:$CF_DUAL:$S_DUAL"; T_VOSE="VOSE:$CF_VOSE:$S_VOSE"; T_ENG="Inglés (con subs):$CF_ENG:$S_ENG"; T_ENG0="Inglés (sin subs):$CF_ENG0:$S_ENG0"
 
   NEEDS="$(printf '%s' "$PROF" | python3 -c '
 import sys,json
@@ -200,7 +214,7 @@ want_min=int(sys.argv[-1])
 items={i.get("name"):i.get("score") for i in (p.get("formatItems") or [])}
 ok = p.get("minFormatScore")==want_min and all(items.get(n)==int(s) for n,i,s in triples)
 print("no" if ok else "yes")
-' "$T_DUB" "$T_DUAL" "$T_VOSE" "$MIN")"
+' "$T_DUB" "$T_DUAL" "$T_VOSE" "$T_ENG" "$T_ENG0" "$MIN")"
   if [ "$NEEDS" = "no" ]; then
     echo "  -> perfil 'Any' (id $P_ID) ya configurado (min=$MIN)"
   else
@@ -216,7 +230,7 @@ for n,i,s in triples:
 p["formatItems"]=items
 p["minFormatScore"]=want_min
 print(json.dumps(p))
-' "$T_DUB" "$T_DUAL" "$T_VOSE" "$MIN" > "/tmp/profile_$app.json"
+' "$T_DUB" "$T_DUAL" "$T_VOSE" "$T_ENG" "$T_ENG0" "$MIN" > "/tmp/profile_$app.json"
     hcode="$(KCURLI -o /dev/null -w '%{http_code}' -X PUT \
       "http://$app:$port/api/v3/qualityprofile/$P_ID" -H "X-Api-Key: $key" -H "Content-Type: application/json" \
       --data-binary @- < "/tmp/profile_$app.json")"
@@ -236,17 +250,21 @@ res=["OK" if p.get("minFormatScore")==want_min else "FAIL"]
 res += ["OK" if items.get(n)==int(s) else "FAIL" for n,i,s in triples]
 res.append(str(p.get("minFormatScore","?")))
 print(" ".join(res))
-' "$T_DUB" "$T_DUAL" "$T_VOSE" "$MIN")"
+' "$T_DUB" "$T_DUAL" "$T_VOSE" "$T_ENG" "$T_ENG0" "$MIN")"
   VMIN="$(printf '%s\n' "$VRES" | cut -d' ' -f1)"
   VDUB="$(printf '%s\n' "$VRES" | cut -d' ' -f2)"
   VDUAL="$(printf '%s\n' "$VRES" | cut -d' ' -f3)"
   VVOSE="$(printf '%s\n' "$VRES" | cut -d' ' -f4)"
-  VMINACT="$(printf '%s\n' "$VRES" | cut -d' ' -f5)"
+  VENG="$(printf '%s\n' "$VRES" | cut -d' ' -f5)"
+  VENG0="$(printf '%s\n' "$VRES" | cut -d' ' -f6)"
+  VMINACT="$(printf '%s\n' "$VRES" | cut -d' ' -f7)"
   check "$VMIN" "minFormatScore=$MIN" "(actual: $VMINACT)"
   check "$VDUB" "CF 'Español (Audio)' score=$S_DUB" ""
   check "$VDUAL" "CF 'Audio dual' score=$S_DUAL" ""
   check "$VVOSE" "CF 'VOSE' score=$S_VOSE" ""
-  for cfname in "Español (Audio)" "Audio dual" "VOSE"; do
+  check "$VENG" "CF 'Inglés (con subs)' score=$S_ENG" ""
+  check "$VENG0" "CF 'Inglés (sin subs)' score=$S_ENG0" ""
+  for cfname in "Español (Audio)" "Audio dual" "VOSE" "Inglés (con subs)" "Inglés (sin subs)"; do
     v="$(cf_id_by_name "$app" "$port" "$key" "$cfname" | python3 -c 'import sys;print("OK" if sys.stdin.read().strip() else "FAIL")')"
     check "$v" "CF '$cfname' presente en $app" ""
   done
