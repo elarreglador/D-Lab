@@ -161,7 +161,7 @@ d=json.load(sys.stdin); print('' if any(x.get('name')=='$app' for x in d) else '
 done
 
 echo
-echo "[5] Prowlarr — indexadores públicos (TPB, YTS, EZTV, Nyaa.si) + FlareSolverr"
+echo "[5] Prowlarr — indexadores públicos multilingüe (1337x, Torrent9, LimeTorrents, Torrent Downloads) + FlareSolverr"
 # Tag cloudflare (idempotente)
 TAG_ID="$(KC -n "$NS" exec "$HELPER" -- curl -s "http://prowlarr:9696/api/v1/tag" -H "X-Api-Key: $PROWLARR_APIKEY" 2>/dev/null \
   | python3 -c "
@@ -180,7 +180,7 @@ if [ "$(cat /tmp/fs)" != "missing" ]; then
 else
   KC -n "$NS" exec "$HELPER" -- curl -s -o /dev/null -X POST \
     "http://prowlarr:9696/api/v1/indexerproxy" -H "Content-Type: application/json" -H "X-Api-Key: $PROWLARR_APIKEY" \
-    -d "{\"name\":\"FlareSolverr\",\"implementation\":\"FlareSolverr\",\"configContract\":\"FlareSolverrSettings\",\"enable\":true,\"tags\":[$TAG_ID],\"fields\":[{\"name\":\"host\",\"value\":\"http://flaresolverr:8191\"},{\"name\":\"requestTimeout\",\"value\":60}]}" \
+    -d "{\"name\":\"FlareSolverr\",\"implementation\":\"FlareSolverr\",\"configContract\":\"FlareSolverrSettings\",\"enable\":true,\"tags\":[$TAG_ID],\"fields\":[{\"name\":\"host\",\"value\":\"http://flaresolverr:8191\"},{\"name\":\"requestTimeout\",\"value\":120}]}" \
     && echo "  -> FlareSolverr proxy creado (tag cloudflare)"
 fi
 
@@ -201,10 +201,10 @@ import sys,json;d=json.load(sys.stdin);print('' if any(x.get('name')=='$name' fo
     echo "  -> $name alta FALLIDA: $(echo "$result" | head -c 120)"
   fi
 }
-idx_add "The Pirate Bay" "thepiratebay" "https://thepiratebay.org/" ""
-idx_add "YTS"            "yts"            "https://yts.mx/"          ""
-idx_add "EZTV"           "eztv"           "https://eztv.re/"         cloudflare
-idx_add "Nyaa.si"        "nyaasi"         "https://nyaa.si/"         cloudflare
+idx_add "1337x"             "1337x"             "https://1337x.to/"           cloudflare
+idx_add "Torrent9"          "torrent9"          "https://www6.torrent9.to/"   ""
+idx_add "LimeTorrents"      "limetorrents"      "https://www.limetorrents.fun/" ""
+idx_add "Torrent Downloads" "torrentdownloads"  "https://www.torrentdownloads.pro/" ""
 
 if [ "$TEST_INDEXERS" = "1" ]; then
   echo

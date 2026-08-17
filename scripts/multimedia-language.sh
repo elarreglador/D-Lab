@@ -5,17 +5,17 @@
 #   1º  Doblado castellano + audio dual en inglés + subtítulos   110+110+100
 #   2º  Doblado castellano + audio dual en inglés                110+110
 #   3º  Doblado castellano (solo)                                110
-#   4º  VOSE (inglés + subtítulos), fallback si no hay doblaje   100
+#   4º  VOSE (subtítulos), fallback si no hay doblaje           100
 #   —   Inglés sin subtítulos                                    0 -> rechazado
 #
 # 3 Custom Formats por app (Sonarr/Radarr):
 #   "Español (Audio)"      LanguageSpecification = Spanish (castellano, NO Latino)
 #   "Audio dual"           ReleaseTitleSpecification (regex dual/multi/es-en)
-#   "VOSE"                 LanguageSpecification = English  AND
-#                          ReleaseTitleSpecification (regex subtítulos)
-# El CF "VOSE" usa dos condiciones de distinto tipo (se combinan con AND, según la
-# doc de Servarr), por lo que solo puntúa releases en inglés con subtítulos y NO
-# suma bonus a un doblaje (se elimina así la categoría "doblado + subtítulos").
+#   "VOSE"                 ReleaseTitleSpecification (regex subtítulos)
+# El CF "VOSE" no exige idioma a propósito: los releases `...-VOSE`/`SUBBED`/`VOS`
+# se parsean a menudo como idioma "Unknown" (no inglés) y exigirlo los dejaría sin
+# puntuar. Al ser solo regex de título, puntúa cualquier release con etiqueta de
+# subtítulos y suma bonus al doblaje (doblado + subs).
 #
 # Se configura el perfil de calidad "Any" (id 1), el único que usa Jellyseerr.
 # Idempotente: reutiliza CFs existentes y no altera el perfil si ya está puntuado.
@@ -169,7 +169,7 @@ print(langs.get("Spanish",""),langs.get("English",""))
   # 2) Custom Formats
   SPEC_DUB="[{\"name\":\"Idioma: Español\",\"implementation\":\"LanguageSpecification\",\"implementationName\":\"Language\",\"infoLink\":\"$info_link\",\"negate\":false,\"required\":false,\"fields\":[{\"name\":\"value\",\"value\":$ES_ID},{\"name\":\"exceptLanguage\",\"value\":false}]}]"
   SPEC_DUAL="[{\"name\":\"Release dual\",\"implementation\":\"ReleaseTitleSpecification\",\"implementationName\":\"Release Title\",\"infoLink\":\"$info_link\",\"negate\":false,\"required\":false,\"fields\":[{\"name\":\"value\",\"value\":\"\\\\b(dual|multi)\\\\b|\\\\b(?:es|esp)[-_.](?:en|eng)\\\\b|\\\\bcastellano\\\\b.*\\\\bingl[ée]s\\\\b\"}]}]"
-  SPEC_VOSE="[{\"name\":\"Idioma: Inglés\",\"implementation\":\"LanguageSpecification\",\"implementationName\":\"Language\",\"infoLink\":\"$info_link\",\"negate\":false,\"required\":false,\"fields\":[{\"name\":\"value\",\"value\":$EN_ID},{\"name\":\"exceptLanguage\",\"value\":false}]},{\"name\":\"Subtítulos\",\"implementation\":\"ReleaseTitleSpecification\",\"implementationName\":\"Release Title\",\"infoLink\":\"$info_link\",\"negate\":false,\"required\":false,\"fields\":[{\"name\":\"value\",\"value\":\"\\\\b(?:vose|voe|subs?|subbed|subtitled|subtitulad[oa]s?)\\\\b\"}]}]"
+  SPEC_VOSE="[{\"name\":\"Subtítulos\",\"implementation\":\"ReleaseTitleSpecification\",\"implementationName\":\"Release Title\",\"infoLink\":\"$info_link\",\"negate\":false,\"required\":false,\"fields\":[{\"name\":\"value\",\"value\":\"\\\\b(?:vose|voe|subs?|subbed|subtitled|subtitulad[oa]s?)\\\\b\"}]}]"
 
   CF_DUB="$(ensure_cf "$app" "$port" "$key" "Español (Audio)" "$SPEC_DUB")"
   echo "  -> CF 'Español (Audio)' id $CF_DUB (score $S_DUB)"
