@@ -5,12 +5,40 @@ metadata:
   namespace: multimedia
   annotations:
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # es-badge: inyecta el script de insignias de idioma en el HTML y sirve
+    # el JS y el proxy same-origin /jf-api/ desde el servicio es-badge.
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      sub_filter '</head>' '<script src="/es-badge.js"></script></head>';
+      sub_filter_once on;
+      sub_filter_types text/html;
+      proxy_set_header Accept-Encoding "";
 spec:
   ingressClassName: nginx
   rules:
     - host: jellyseerr.elarreglador.eu
       http:
         paths:
+          - path: /es-badge.js
+            pathType: Exact
+            backend:
+              service:
+                name: es-badge
+                port:
+                  number: 80
+          - path: /es-badge-api/
+            pathType: Prefix
+            backend:
+              service:
+                name: es-badge
+                port:
+                  number: 80
+          - path: /jf-api/
+            pathType: Prefix
+            backend:
+              service:
+                name: es-badge
+                port:
+                  number: 80
           - path: /
             pathType: Prefix
             backend:
