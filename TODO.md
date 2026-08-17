@@ -22,6 +22,8 @@
 
 ## Tareas finalizadas
 
+- [x] Interfaz de Jellyseerr en castellano (2026-08-17): locale `es` en `POST /api/v1/settings/main` (por defecto) y en `POST /api/v1/user/1/settings/main` (admin, preservando permisos=2). Verificado en `settings/public` y `GET /user/1`. Documentado en 03-Aplicaciones.md
+- [x] Política de idioma de descargas (castellano) en Sonarr/Radarr (2026-08-17): `scripts/multimedia-language.sh` crea/actualiza los CFs "Español (Audio)" (110), "Audio dual" (110) y "VOSE" (100, solo regex de subs) y puntúa el perfil "Any" con `minFormatScore=100` en ambas apps. Jerarquía: dual+subs 320 > dual 220 > doblado+subs 210 > doblado 110 > VOSE 100 > inglés sin subs 0. Validado con `/api/v3/parse` (14/14 checks OK, script idempotente). Documentado en 03-Aplicaciones.md
 - [x] Despliegue y verificación de la landing con la nueva sección (2026-08-16): ConfigMap `landing-html` ~149 KB base64, pods Running, `/acerca-de-ti.js` 200 y md5 idéntico al local
 - [x] Despliegue de la landing ciberpunk (2026-08-17): fuentes auto-alojadas (6 woff2, subset latin), ConfigMap ~296 KB base64, pods Running, curl 200 en `/`, `/styles.css` y fuentes con md5 idéntico al local. `deploy-landing.sh` migrado a `kubectl apply --server-side` (la anotación `last-applied` del client-side superaba su tope de 256 KiB con el ConfigMap engordado)
 - [x] Documentación actualizada (README-TECH § Web pública, AGENTS.md)
