@@ -81,18 +81,21 @@
         <article class="card">
           <img class="card-icon" src="multimedia.svg" alt="" width="32" height="32">
           <h3>Multimedia</h3>
-          <p class="card-config-title">Películas y series del cluster D-Lab</p>
           <ul class="card-config">
-            <li><strong>Jellyfin</strong><a href="https://jellyfin.elarreglador.eu" target="_blank" rel="noopener">jellyfin.elarreglador.eu</a></li>
-            <li><strong>Jellyseerr</strong><a href="https://jellyseerr.elarreglador.eu" target="_blank" rel="noopener">jellyseerr.elarreglador.eu</a></li>
+            <li><strong>Jellyfin</strong><br><a href="https://jellyfin.elarreglador.eu" target="_blank" rel="noopener">jellyfin.elarreglador.eu</a></li>
+            <li><strong>Jellyseerr</strong><br><a href="https://jellyseerr.elarreglador.eu" target="_blank" rel="noopener">jellyseerr.elarreglador.eu</a></li>
           </ul>
           <details>
             <summary>Gestión interna (solo LAN 192.168.1.x)</summary>
             <ul class="card-config" style="margin-top:.6rem">
               <li><strong>Sonarr</strong><a href="http://192.168.1.55:8989" target="_blank" rel="noopener">192.168.1.55:8989</a></li>
+              <p class="card-config-title">Organizador de series</p>
               <li><strong>Radarr</strong><a href="http://192.168.1.56:7878" target="_blank" rel="noopener">192.168.1.56:7878</a></li>
+              <p class="card-config-title">Organizador de peliculas</p>
               <li><strong>Prowlarr</strong><a href="http://192.168.1.57:9696" target="_blank" rel="noopener">192.168.1.57:9696</a></li>
+              <p class="card-config-title">Gestiona los indexadores</p>
               <li><strong>qBittorrent</strong><a href="http://192.168.1.58:8080" target="_blank" rel="noopener">192.168.1.58:8080</a></li>
+              <p class="card-config-title">Cliente de descargas</p>
             </ul>
             <p class="muted" style="font-size:.85rem;opacity:.8;margin:.6rem 0 0">No accesibles desde Internet: solo desde la red local.</p>
           </details>
@@ -192,7 +195,7 @@
         </a>
       </li>
     </ul>
-    <p>Sirviendo desde el cluster <a href="https://github.com/elarreglador/D-Lab">D-Lab</a> — Kubernetes · LXC · WireGuard</p>
+    <p>Sirviendo desde el cluster <a href="https://github.com/elarreglador/D-Lab">D-Lab</a></p>
     <p class="muted">© 2026 David Moreno</p>
   </footer>
   <script type="module" src="acerca-de-ti.js?v=20260817i"></script>

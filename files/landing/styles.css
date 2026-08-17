@@ -391,9 +391,15 @@ button.btn {
 }
 
 .card {
+  --surface: #ffffff;
+  --text: #1f2328;
+  --text-muted: #59636e;
+  --accent: #0969da;
+  --border: #d0d7de;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(16, 24, 40, 0.08);
   padding: 1.4rem;
   transition: border-color 0.15s ease;
 }
