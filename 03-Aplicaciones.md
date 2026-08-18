@@ -1,6 +1,6 @@
 # 03-Aplicaciones — Aplicaciones del cluster: pods y configuración
 
-**Objetivo**: documentar las aplicaciones desplegadas en el cluster Kubernetes de D-Lab: sus pods (workloads, imágenes, réplicas, recursos), su configuración específica y cómo se aplican los cambios. **Este documento es público (GitHub): no incluye credenciales ni secretos.** Las credenciales viven en `info_sensible/` (gitignored) y en `values-monitoring.yaml` dentro de k8s-master-1 (`/root/`), nunca en este repo.
+**Objetivo**: documentar las aplicaciones desplegadas en el cluster Kubernetes de D-Lab: sus pods (workloads, imágenes, réplicas, recursos), su configuración específica y cómo se aplican los cambios. **Este documento es público (GitHub): no incluye credenciales ni secretos.** Las credenciales viven en `info_sensible/` (gitignored) o se pasan por variable de entorno a los scripts, nunca en este repo.
 
 **Contexto**: ver [README-TECH.md](./README-TECH.md#fase-12--monitoreo-y-observabilidad) para el procedimiento de instalación. Manifiestos del repo en `files/`.
 
@@ -65,12 +65,8 @@ Facade de peticiones (Jellyseerr) → organizadores (Sonarr/Radarr) → rastreo 
 
 - **Helm release**: `kube-prometheus-stack` (chart v88.0.1), namespace `monitoring`.
 - **Prometheus operator**: v0.93.0.
-- **Values**: `/root/values-monitoring.yaml` en k8s-master-1 (no versionado; contiene el `adminPassword` de Grafana). Backup previo: `/root/values-monitoring.yaml.bak-*`.
-- **Actualizar config**: editar el fichero (o local + `lxc file push - k8s-master-1/root/values-monitoring.yaml`) y ejecutar en k8s-master-1:
-  ```bash
-  helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-    --namespace monitoring --values /root/values-monitoring.yaml --wait --timeout 300s
-  ```
+- **Values**: el fichero `/root/values-monitoring.yaml` **ya no existe** en k8s-master-1 ni en k8s-master-2 (verificado 2026-08-18). Se usó en la instalación original para pasar el `adminPassword` de Grafana, pero hoy la password efectiva de admin es la del Secret `kube-prometheus-stack-grafana` en `monitoring` (efímero, ver abajo). El chart sigue gestionado por helm; si algún día se reinstala, habría que reconstruir el values con `grafana.grafana.ini` y `adminPassword`.
+- **Actualizar config**: hoy la configuración viva vive en el ConfigMap `kube-prometheus-stack-grafana` (`grafana.ini`), el Secret `kube-prometheus-stack-grafana` (admin) y los ConfigMaps de dashboards/datasources (sidecar kiwigrid). Cambios puntuales se aplican con `kubectl`; el mecanismo completo de helm upgrade exigiría reconstruir `values-monitoring.yaml` (ya no existe, ver arriba).
 
 ### Resumen de workloads
 
@@ -88,12 +84,15 @@ Facade de peticiones (Jellyseerr) → organizadores (Sonarr/Radarr) → rastreo 
 ## Grafana
 
 - **URL pública**: `https://grafana.elarreglador.eu` (Ingress `grafana` en `monitoring`).
-- **Acceso**: solo login propio de Grafana (`admin` / `adminPassword` en `values-monitoring.yaml`). **Sin** basic-auth web ni anonymous. La página de login es pública.
+- **Acceso**: solo login propio de Grafana. **Sin** basic-auth web ni anonymous. La página de login es pública. Usuarios (las credenciales concretas no van a este repo público):
+  - `elarreglador` — uso diario, **rol Admin en la org 1 + Grafana Admin global**. Garantizado por `scripts/grafana-user.sh` (idempotente; passwords en `info_sensible/grafana-user.env`, gitignored).
+  - `admin` — mantenimiento; password en el Secret `kube-prometheus-stack-grafana` (`admin-password`, base64). Al ser el storage efímero, si se pierde se resetea vía `kubectl` (patch del Secret + `rollout restart`) o con la CLI de Grafana.
+- **Nota de automatización**: el endpoint `POST /api/login` de Grafana 13 espera JSON y aplica *rate limiting* por IP tras varios intentos fallidos (~10 min). En scripts es más fiable autenticar con **Basic Auth** (`curl -u user:pass .../api/user`) que con el login por form.
 - **Ingress** (`files/monitoring/grafana-ingress.yaml`): TLS con cert-manager (secret `grafana-elarreglador-eu-tls`), `force-ssl-redirect: true`, sin anotaciones de auth.
 - **grafana.ini** (vía `grafana.grafana.ini` en los values):
   - `server.root_url = https://grafana.elarreglador.eu/` + `server.domain = grafana.elarreglador.eu` — **obligatorio** detrás del proxy TLS; sin ellos el frontend recibe `appUrl=http://localhost:3000/` y la sesión se pierde al navegar (login en cada página).
   - `security.cookie_secure = true` + `security.cookie_samesite = lax` — cookie de sesión solo por HTTPS.
-- **Almacenamiento**: efímero (`persistence.enabled: false`). Tras reiniciar el pod se pierden cambios de UI no provisionados.
+- **Almacenamiento**: efímero (`persistence.enabled: false`). Tras reiniciar el pod se pierden cambios de UI no provisionados **y los usuarios**. Para re-garantizar `elarreglador` tras una recreación: `./scripts/grafana-user.sh` (lee las credenciales de `info_sensible/grafana-user.env`).
 - **Recursos**: requests 100m/200Mi, limits 500m/512Mi.
 - **Ojo Grafana 13**: el endpoint `POST /login` espera **JSON** (`Content-Type: application/json`, cuerpo `{"user":"...","password":"..."}`), no form-urlencoded. Afecta a la automatización con curl, no al navegador.
 - **Datos de los paneles**: Grafana **consulta** a Prometheus y AlertManager (no al revés: Prometheus recolecta y almacena; Grafana hace las consultas cuando pinta un panel). Datasources definidos en el ConfigMap `kube-prometheus-stack-grafana-datasource` (montado por el sidecar kiwigrid):
@@ -193,9 +192,9 @@ Facade de peticiones (Jellyseerr) → organizadores (Sonarr/Radarr) → rastreo 
 ## Notas operativas
 
 - **Alertas firing por diseño**: `TargetDown`, `etcdMembersDown`, `etcdInsufficientMembers` (targets `kube-etcd`/`kube-scheduler`/`kube-controller-manager`/`kube-proxy` no exponen métricas en los puertos por defecto en LXC) y `Watchdog` (centinela). La cadena principal (kubelet, apiserver, coredns, node-exporter, hosts) está **up**.
-- **Credenciales**: nunca en el repo. Grafana admin → `values-monitoring.yaml` en k8s-master-1. Clave web / secretos → `info_sensible/` (gitignored).
+- **Credenciales**: nunca en el repo. Grafana → usuario `elarreglador` (garantizado por `scripts/grafana-user.sh`; passwords en `info_sensible/grafana-user.env`, gitignored) y `admin` (Secret `kube-prometheus-stack-grafana`). Clave web / secretos → `info_sensible/` (gitignored).
 - **CNI Calico — tokens de `calico-kubeconfig`**: el token del SA `calico-cni-plugin` usado por el plugin CNI en los 4 nodos (`/etc/cni/net.d/calico-kubeconfig`) **expira** (el emitido por kubeadm el 2026-08-01 caducó a las 24 h y todos los pods nuevos fallaban con `error getting ClusterInformation: ... Unauthorized`). Se fijó creando el Secret `calico-cni-plugin-token` (kube-system, anotación `kubernetes.io/service-account.name`) — sin expiración — y reescribiendo el `token:` de ese kubeconfig en los 4 nodos (`verificado 2026-08-15`; se renovó de nuevo con el static secret y el rollout de Radarr completó). Si vuelve a aparecer `FailedCreatePodSandBox` por Calico en pods nuevos, revisar la fecha de expiración de ese token: el proceso manual es copia de seguridad del kubeconfig, descarga del Secret de token estático y reescritura del campo `token` (`kubectl get secret calico-cni-plugin-token -n kube-system -o jsonpath='{.data.token}' | base64 -d`), en cada nodo.
-- **Scripts útiles** (`scripts/`): `deploy-landing.sh` (despliegue de la landing), `deploy-nodered.sh` (despliegue de Node-RED; requiere `NODERED_PASSWORD` en el entorno), `deploy-mariadb.sh` (despliegue de MariaDB; requiere `MARIADB_ROOT_PASSWORD` y `MARIADB_PASSWORD` en el entorno), `deploy-sdr.sh` (despliegue del servidor rtl_tcp; etiqueta k8s-worker-1 y aplica `files/sdr/`), `sync-web-auth.sh` (clave web; hoy **sin namespaces por defecto** — Grafana y Node-RED usan su propio login), `computer_info.sh`.
+- **Scripts útiles** (`scripts/`): `deploy-landing.sh` (despliegue de la landing), `deploy-nodered.sh` (despliegue de Node-RED; requiere `NODERED_PASSWORD` en el entorno), `deploy-mariadb.sh` (despliegue de MariaDB; requiere `MARIADB_ROOT_PASSWORD` y `MARIADB_PASSWORD` en el entorno), `deploy-sdr.sh` (despliegue del servidor rtl_tcp; etiqueta k8s-worker-1 y aplica `files/sdr/`), `sync-web-auth.sh` (clave web; hoy **sin namespaces por defecto** — Grafana y Node-RED usan su propio login), `grafana-user.sh` (garantiza el usuario `elarreglador` de Grafana; lee las credenciales de `info_sensible/grafana-user.env`, gitignored), `computer_info.sh`.
 
 ## Referencias
 

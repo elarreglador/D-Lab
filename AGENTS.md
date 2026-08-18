@@ -11,7 +11,7 @@ Vault de documentación (Obsidian) + scripts de despliegue del laboratorio caser
 ## Secretos: regla crítica
 
 - `info_sensible/` está en `.gitignore` y nunca debe versionarse.
-- Las credenciales viven fuera del repo: `/root/values-monitoring.yaml` en k8s-master-1 (admin de Grafana), `~/server/wireguard/` (claves WG).
+- Las credenciales viven fuera del repo: Grafana → usuario `elarreglador` (garantizado por `scripts/grafana-user.sh`; passwords en `info_sensible/grafana-user.env`, gitignored) y `admin` (Secret K8s `kube-prometheus-stack-grafana` en `monitoring`); `~/server/wireguard/` (claves WG). El fichero `values-monitoring.yaml` ya no existe en los hosts k8s-master-1/-2.
 - Los scripts de despliegue reciben las claves por variable de entorno (`NODERED_PASSWORD`, `MARIADB_ROOT_PASSWORD`, `MARIADB_PASSWORD`) y construyen el Secret por stdin (`kubectl apply -f -`) — nunca escribir claves en disco ni en el repo.
 - `files/wg0-client-*.conf` son plantillas con placeholders, no claves reales.
 
