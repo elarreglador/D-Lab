@@ -1498,23 +1498,25 @@ Sin métricas ni logs, operar un cluster es como volar a ciegas. Prometheus reco
 kube-prometheus-stack (helm, namespace monitoring)
   ├─ prometheus-operator ── gestiona Prometheus/AlertManager vía CRDs
   ├─ prometheus-0        ── scrape: kubelet, apiserver, coredns, node-exporter,
-  │                         kube-state-metrics, host-node (D1/D2), cert-manager
+  │                         kube-state-metrics, host-node (D1/D2), dv0-host (DV0), cert-manager
   ├─ grafana (3/3)       ── exposed en https://grafana.elarreglador.eu
   ├─ alertmanager        ── sin receiver (alertas solo UI)
   └─ node-exporter DS    ── métricas de los 4 nodos K8s
 node-exporter nativo en D1/D2 (apt) ── métricas de los hosts físicos (OS)
+node-exporter en DV0 (10.8.0.1:9100) ── métricas del jumpbox, vía relay socat en D2 (:19200)
 ```
 
 **Decisiones de diseño**:
 - **Almacenamiento efímero** (`emptyDir`) para Prometheus, Grafana **y AlertManager**: la TSDB de Prometheus sobre GlusterFS/NFS no es fiable (el primer intento con PVC NFS dejó `prometheus-0` sin poder arrancar la TSDB). No existe ningún PVC de monitoreo (verificado 2026-08-01: los StatefulSets usan `emptyDir`). La configuración vive en ConfigMaps/Secrets, así que se pierde solo el histórico.
 - **Recursos ajustados**: el primer despliegue hizo OOM a Grafana (límite 256Mi → `exitCode 137`). Se subió a 512Mi/200Mi. DV0 con 1 vCPU no soportaría este stack; por eso corre en los nodos del cluster.
-- **Node-exporter host en ambos modos**: DaemonSet para los 4 nodos K8s + paquete nativo `prometheus-node-exporter` en D1/D2 (métricas del OS físico del host, no del container).
+- **Node-exporter host en ambos modos**: DaemonSet para los 4 nodos K8s + paquete nativo `prometheus-node-exporter` en D1/D2 (métricas del OS físico del host, no del container) + binario en DV0 (bind a `10.8.0.1:9100`, únicamente por túnel WG).
 - **Alertas sin notificación**: solo se ven en la UI de AlertManager (sin receiver). El usuario decidió no configurar envíos externos en esta fase.
 
 **Limitación de red descubierta (macvlan)**:
 Los containers LXD usan red **macvlan** (`macvlan0`), que por diseño impide que un container alcance a su **propio host**. D1 no es alcanzable desde los containers que corren en D1 (ni por IP LAN ni WG), mientras que D2 sí es alcanzable (los containers de D1 llegan a `192.168.1.12`). Solución adoptada para D1:
 - `socat` en D2 como relay: `TCP4-LISTEN:19100 → TCP4:192.168.1.11:9100` (servicio systemd `node-exporter-relay-d1`).
 - El ServiceMonitor `host-node` scrapea D2 directo (`:9100`) y D1 vía relay (`:19100`), con relabeling `host=d2`/`host=d1`.
+- **DV0** (2026-08-18): DV0 no está en la LAN (VM IONOS); su node_exporter escucha en `10.8.0.1:9100` (túnel WireGuard) y se scrapea vía un segundo relay en D2 (`TCP4-LISTEN:19200 → TCP4:10.8.0.1:9100`, servicio systemd `node-exporter-relay-dv0`). ServiceMonitor `dv0-host` con relabeling `host=dv0`.
 
 **Procedimiento realizado**:
 
@@ -1630,12 +1632,13 @@ Si algún servicio futuro se protege con la clave web, la verificación será: `
 - **Responsive** (grid `auto-fit`, `clamp()` en tipografías, media queries para móvil) y accesible (HTML semántico, `lang="es"`, `alt`, skip-link, `prefers-reduced-motion`).
 - Contenido compacto: presentación con apodo `@elarreglador` (subtítulo enlazado al perfil de GitHub), tecnologías (SRE/IoT/Desarrollo/Herramientas), contacto (GitHub, repositorios, Currículum, correo, LinkedIn, D-Lab) y pie.
 - Cabecera fija (sticky): logo monograma `DM` + nombre en la brand y navegación por anclas; fondo al 96% de opacidad (oscurecida) con blur y borde inferior.
+- **Sección «Monitorización en vivo»** (2026-08-18): embebe en un `<iframe>` el **public dashboard** de Grafana «Sistema D-Lab» (CPU/RAM de DV0, D1, D2 y los 4 nodos K8s) con `src="https://grafana.elarreglador.eu/public-dashboards/<accessToken>?theme=dark&from=now-1h&to=now"` (tema fijo oscuro, ventana de 1 h). El `index.html` lleva el placeholder `__PUBLIC_DASHBOARD_URL__`; `deploy-landing.sh` lo sustituye en un **staging** (`mktemp`) por la URL real leída de `info_sensible/public-dashboard.env` (gitignored). Requisitos en Grafana: `allow_embedding = true` (sin `X-Frame-Options`) + feature toggle `publicDashboards`; el registro del public dashboard lo garantiza `scripts/ensure-public-dashboard.sh` (efímero, ver [03-Aplicaciones.md](./03-Aplicaciones.md)). **Ojo Grafana 13**: la ruta pública es `/public-dashboards/<token>` (con guion), no `/public/dashboards/`.
 
 **Desplegar/actualizar** (el contenido viaja por stdin, método probado):
 ```bash
 ./scripts/deploy-landing.sh
 ```
-El script construye el ConfigMap `landing-html` desde `files/landing/` (claves planas: `index.html`, `styles.css`, `acerca-de-ti.*`, `*.svg`, `*.webp` — ConfigMap no admite `/` en las claves). Todas las claves se escriben en `binaryData` (base64), incluidos los ficheros de texto, por simplicidad del generador; los pods las montan igualmente como ficheros. Aplica ConfigMap + Deployment/Service + Ingress vía `ssh server` con **`kubectl apply --server-side`** (con client-side, el contenido del ConfigMap —~180 KB base64— se duplica en la anotación `last-applied-configuration`, que tiene su propio tope de 256 KiB y rechazaba el apply; ver [Límite y fallback](#límite-y-fallback)), reiniciando los pods para forzar la carga del contenido. **Cache-busting**: el `index.html` referencia `styles.css`, `acerca-de-ti.css` y `acerca-de-ti.js` con `?v=YYYYMMDD`; al cambiar la web hay que subir esa versión para que los navegadores no sirvan CSS/JS antiguos de caché (nginx stock no envía `Cache-Control` y el navegador usa heurística con `Last-Modified`/`ETag`).
+El script construye el ConfigMap `landing-html` desde `files/landing/` (claves planas: `index.html`, `styles.css`, `acerca-de-ti.*`, `*.svg`, `*.webp` — ConfigMap no admite `/` en las claves). En un primer paso copia el contenido a un staging temporal y resuelve el placeholder `__PUBLIC_DASHBOARD_URL__` de `index.html` con la URL del public dashboard de Grafana (si falta, deja el iframe oculto y avisa). Todas las claves se escriben en `binaryData` (base64), incluidos los ficheros de texto, por simplicidad del generador; los pods las montan igualmente como ficheros. Aplica ConfigMap + Deployment/Service + Ingress vía `ssh server` con **`kubectl apply --server-side`** (con client-side, el contenido del ConfigMap —~180 KB base64— se duplica en la anotación `last-applied-configuration`, que tiene su propio tope de 256 KiB y rechazaba el apply; ver [Límite y fallback](#límite-y-fallback)), reiniciando los pods para forzar la carga del contenido. **Cache-busting**: el `index.html` referencia `styles.css`, `acerca-de-ti.css` y `acerca-de-ti.js` con `?v=YYYYMMDD`; al cambiar la web hay que subir esa versión para que los navegadores no sirvan CSS/JS antiguos de caché (nginx stock no envía `Cache-Control` y el navegador usa heurística con `Last-Modified`/`ETag`).
 
 **Verificación**:
 ```bash

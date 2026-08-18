@@ -12,8 +12,8 @@
   <meta property="og:title" content="David Moreno — Automatización · Infraestructura IoT · SRE">
   <meta property="og:description" content="Perfil híbrido entre electricidad y programación. Linux de vieja escuela, sistemas embebidos y fiabilidad de infraestructuras críticas.">
   <link rel="icon" href="dlab.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20260817i">
-  <link rel="stylesheet" href="acerca-de-ti.css?v=20260817i">
+  <link rel="stylesheet" href="styles.css?v=20260818c">
+  <link rel="stylesheet" href="acerca-de-ti.css?v=20260818">
   <script>
     (function () {
       // Tema por defecto del sistema; solo claro/oscuro manual si el visitante lo eligió con el botón.
@@ -37,6 +37,7 @@
       </a>
       <ul class="nav-links">
         <li><a href="#dlab">D-Lab</a></li>
+        <li><a href="#monitorizacion">Monitorización</a></li>
         <li><a href="#servicios">Servicios</a></li>
         <li><a href="#acerca-de-mi">Acerca de mí</a></li>
       </ul>
@@ -73,6 +74,20 @@
                width="800" height="447" fetchpriority="high">
         </figure>
       </div>
+    </section>
+
+    <section class="section" id="monitorizacion" aria-labelledby="titulo-monitorizacion">
+      <h2 id="titulo-monitorizacion">Monitorización en vivo</h2>
+      <p class="bio">
+        CPU y RAM de los equipos del cluster, en directo desde Grafana. Cada tarjeta muestra el
+        uso en porcentaje durante las últimas 24 horas: el jumpbox DV0, los hosts físicos D1 y D2
+        y los cuatro nodos Kubernetes (control y trabajadores) que corren sobre ellos.
+      </p>
+      <figure class="grafana-embed">
+        <iframe src="__PUBLIC_DASHBOARD_URL__?theme=dark&from=now-24h&to=now"
+                title="Gráficas en vivo de CPU y RAM del cluster D-Lab"
+                loading="lazy" referrerpolicy="no-referrer" allowfullscreen frameborder="0"></iframe>
+      </figure>
     </section>
 
     <section class="section" id="servicios" aria-labelledby="titulo-servicios">
@@ -198,7 +213,7 @@
     <p>Sirviendo desde el cluster <a href="https://github.com/elarreglador/D-Lab">D-Lab</a></p>
     <p class="muted">© 2026 David Moreno</p>
   </footer>
-  <script type="module" src="acerca-de-ti.js?v=20260817i"></script>
+  <script type="module" src="acerca-de-ti.js?v=20260818"></script>
   <script>
     (function () {
       var btn = document.getElementById("theme-toggle");

@@ -1,0 +1,413 @@
+# Dashboard 'Sistema D-Lab' provisionado por el sidecar kiwigrid (label grafana_dashboard: "1").
+# Muestra CPU y RAM de los hosts físicos D1/D2 (job host-node, label host) y de los 4 nodos K8s
+# (job node-exporter, filtrando por instance). Los valores están en porcentaje de uso (0-100).
+# Para publicarlo en la landing se usa un public dashboard (ver scripts/ensure-public-dashboard.sh).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-sistema-dlab
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  sistema-dlab.json: |
+    {
+      "annotations": {
+        "list": []
+      },
+      "editable": false,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "liveNow": false,
+      "panels": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "description": "VM IONOS (jumpbox, VPN WireGuard, nginx; 10.8.0.1) vía relay en D2",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "max": 100,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 60 },
+                  { "color": "red", "value": 85 }
+                ]
+              },
+              "unit": "percent"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 5, "w": 24, "x": 0, "y": 0 },
+          "id": 7,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "pluginVersion": "13.1.1",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 - avg by (host) (rate(node_cpu_seconds_total{job=\"dv0-host\", host=\"dv0\", mode=\"idle\"}[5m])) * 100",
+              "legendFormat": "CPU",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"dv0-host\", host=\"dv0\"} / node_memory_MemTotal_bytes{job=\"dv0-host\", host=\"dv0\"})",
+              "legendFormat": "RAM",
+              "range": true,
+              "refId": "B"
+            }
+          ],
+          "title": "DV0 · Host",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "description": "Host físico D1 (OptiPlex, 192.168.1.11) vía relay en D2",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "max": 100,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 60 },
+                  { "color": "red", "value": 85 }
+                ]
+              },
+              "unit": "percent"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 5, "w": 8, "x": 0, "y": 5 },
+          "id": 1,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "pluginVersion": "13.1.1",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 - avg by (host) (rate(node_cpu_seconds_total{job=\"host-node\", host=\"d1\", mode=\"idle\"}[5m])) * 100",
+              "legendFormat": "CPU",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"host-node\", host=\"d1\"} / node_memory_MemTotal_bytes{job=\"host-node\", host=\"d1\"})",
+              "legendFormat": "RAM",
+              "range": true,
+              "refId": "B"
+            }
+          ],
+          "title": "D1 · Host",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "description": "Nodo del cluster K8s (LXC) en D1",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "max": 100,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 60 },
+                  { "color": "red", "value": 85 }
+                ]
+              },
+              "unit": "percent"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 5, "w": 8, "x": 8, "y": 5 },
+          "id": 2,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "pluginVersion": "13.1.1",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.21:9100\", mode=\"idle\"}[5m])) * 100",
+              "legendFormat": "CPU",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance=\"192.168.1.21:9100\"} / node_memory_MemTotal_bytes{instance=\"192.168.1.21:9100\"})",
+              "legendFormat": "RAM",
+              "range": true,
+              "refId": "B"
+            }
+          ],
+          "title": "D1 · k8s-master-1",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "description": "Nodo del cluster K8s (LXC) en D1",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "max": 100,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 60 },
+                  { "color": "red", "value": 85 }
+                ]
+              },
+              "unit": "percent"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 5, "w": 8, "x": 16, "y": 5 },
+          "id": 3,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "pluginVersion": "13.1.1",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.30:9100\", mode=\"idle\"}[5m])) * 100",
+              "legendFormat": "CPU",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance=\"192.168.1.30:9100\"} / node_memory_MemTotal_bytes{instance=\"192.168.1.30:9100\"})",
+              "legendFormat": "RAM",
+              "range": true,
+              "refId": "B"
+            }
+          ],
+          "title": "D1 · k8s-worker-1",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "description": "Host físico D2 (OptiPlex, 192.168.1.12)",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "max": 100,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 60 },
+                  { "color": "red", "value": 85 }
+                ]
+              },
+              "unit": "percent"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 5, "w": 8, "x": 0, "y": 10 },
+          "id": 4,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "pluginVersion": "13.1.1",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 - avg by (host) (rate(node_cpu_seconds_total{job=\"host-node\", host=\"d2\", mode=\"idle\"}[5m])) * 100",
+              "legendFormat": "CPU",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"host-node\", host=\"d2\"} / node_memory_MemTotal_bytes{job=\"host-node\", host=\"d2\"})",
+              "legendFormat": "RAM",
+              "range": true,
+              "refId": "B"
+            }
+          ],
+          "title": "D2 · Host",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "description": "Nodo del cluster K8s (LXC) en D2",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "max": 100,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 60 },
+                  { "color": "red", "value": 85 }
+                ]
+              },
+              "unit": "percent"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 5, "w": 8, "x": 8, "y": 10 },
+          "id": 5,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "pluginVersion": "13.1.1",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.22:9100\", mode=\"idle\"}[5m])) * 100",
+              "legendFormat": "CPU",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance=\"192.168.1.22:9100\"} / node_memory_MemTotal_bytes{instance=\"192.168.1.22:9100\"})",
+              "legendFormat": "RAM",
+              "range": true,
+              "refId": "B"
+            }
+          ],
+          "title": "D2 · k8s-master-2",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "description": "Nodo del cluster K8s (LXC) en D2",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "max": 100,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 60 },
+                  { "color": "red", "value": 85 }
+                ]
+              },
+              "unit": "percent"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 5, "w": 8, "x": 16, "y": 10 },
+          "id": 6,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "pluginVersion": "13.1.1",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.32:9100\", mode=\"idle\"}[5m])) * 100",
+              "legendFormat": "CPU",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
+              "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance=\"192.168.1.32:9100\"} / node_memory_MemTotal_bytes{instance=\"192.168.1.32:9100\"})",
+              "legendFormat": "RAM",
+              "range": true,
+              "refId": "B"
+            }
+          ],
+          "title": "D2 · k8s-worker-2",
+          "type": "stat"
+        }
+      ],
+      "refresh": "1m",
+      "schemaVersion": 39,
+      "tags": ["dlab"],
+      "templating": {
+        "list": []
+      },
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "Sistema D-Lab",
+      "uid": "sistema-dlab",
+      "version": 1,
+      "weekStart": ""
+    }

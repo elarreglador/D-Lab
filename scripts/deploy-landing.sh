@@ -6,10 +6,30 @@ LANDING="$BASE/files/landing"
 KUBECTL_HOST="${KUBECTL_HOST:-server}"
 CONFIGMAP=landing-html
 
+# Staging: copia del contenido con el placeholder del public dashboard resuelto.
+# index.html lleva src="__PUBLIC_DASHBOARD_URL__?theme=dark&from=now-1h&to=now"; aquí se
+# sustituye por la URL pública del dashboard 'Sistema D-Lab' (info_sensible/public-dashboard.env,
+# gitignored, generado por scripts/ensure-public-dashboard.sh).
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+
+if [[ -f "$BASE/info_sensible/public-dashboard.env" ]]; then
+  source "$BASE/info_sensible/public-dashboard.env"
+fi
+PUBLIC_DASHBOARD_URL="${PUBLIC_DASHBOARD_URL:-}"
+
+if [[ -z "$PUBLIC_DASHBOARD_URL" ]]; then
+  echo "AVISO: no hay PUBLIC_DASHBOARD_URL (info_sensible/public-dashboard.env). El iframe de Grafana quedará oculto." >&2
+  PUBLIC_DASHBOARD_URL="about:blank"
+fi
+
 if [[ ! -f "$LANDING/index.html" ]]; then
   echo "ERROR: no existe $LANDING/index.html" >&2
   exit 1
 fi
+
+cp -a "$LANDING/." "$STAGE/"
+sed -i "s|__PUBLIC_DASHBOARD_URL__|$PUBLIC_DASHBOARD_URL|g" "$STAGE/index.html"
 
 ETCD_LIMIT=$((1572864))    # default etcd max-request-bytes (1,5 MiB); el cluster no lo sobreescribe
 ABORT_B64=$((ETCD_LIMIT * 23 / 25))   # ~1,35 MiB: margen por overhead YAML + base64
@@ -18,7 +38,7 @@ WARN_B64=$((921600))                 # ~0,9 MiB: aviso generoso antes del techo
 total_bytes=0
 while IFS= read -r -d '' f; do
   total_bytes=$((total_bytes + $(stat -c%s "$f")))
-done < <(find "$LANDING" -maxdepth 1 -type f ! -name '*.yaml' -print0)
+done < <(find "$STAGE" -maxdepth 1 -type f ! -name '*.yaml' -print0)
 total_b64=$((total_bytes * 4 / 3))
 
 echo "Contenido de la web: $((total_bytes / 1024)) KB (≈$((total_b64 / 1024)) KB en base64; techo efectivo ≈$((ETCD_LIMIT / 1024)) KB)"
@@ -41,7 +61,7 @@ fi
   while IFS= read -r -d '' f; do
     key="$(basename "$f")"
     printf '  %s: %s\n' "$key" "$(base64 -w0 < "$f")"
-  done < <(find "$LANDING" -maxdepth 1 -type f ! -name '*.yaml' -print0 | sort -z)
+  done < <(find "$STAGE" -maxdepth 1 -type f ! -name '*.yaml' -print0 | sort -z)
   echo "---"
   cat "$LANDING/landing.yaml"
   echo "---"

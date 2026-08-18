@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: host-node
+  name: host-node
+  namespace: monitoring
+spec:
+  clusterIP: None
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: 9100
+    - name: d1-relay
+      port: 19100
+      targetPort: 19100
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: host-node
+  namespace: monitoring
+subsets:
+  # D2 expone su propio node_exporter del host físico.
+  - addresses:
+      - ip: 192.168.1.12
+    ports:
+      - name: metrics
+        port: 9100
+        protocol: TCP
+  # D1 no es alcanzable desde el cluster; se scrapea vía un relay (socat) en D2.
+  - addresses:
+      - ip: 192.168.1.12
+    ports:
+      - name: d1-relay
+        port: 19100
+        protocol: TCP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    app: host-node
+    release: kube-prometheus-stack
+  name: host-node
+  namespace: monitoring
+spec:
+  endpoints:
+    - path: /metrics
+      port: metrics
+      relabelings:
+        - replacement: d2
+          targetLabel: host
+    - path: /metrics
+      port: d1-relay
+      relabelings:
+        - replacement: d1
+          targetLabel: host
+  selector:
+    matchLabels:
+      app: host-node

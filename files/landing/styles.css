@@ -317,6 +317,7 @@ h1 {
 
 #dlab .bio,
 #acerca-de-mi .bio,
+#monitorizacion .bio,
 #acerca-de-ti-lead {
   max-width: none;
 }
@@ -478,6 +479,23 @@ button.btn {
 
 .card details[open] summary {
   color: var(--accent);
+}
+
+/* Gráficas embebidas de Grafana (public dashboard del cluster) */
+.grafana-embed {
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.grafana-embed iframe {
+  display: block;
+  width: 100%;
+  height: 670px;
+  aspect-ratio: 24 / 11;
+  border: 0;
 }
 
 .pills {
