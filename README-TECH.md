@@ -199,6 +199,7 @@ Máquina virtual en IONOS para acceso externo al cluster:
 | [README-TECH.md#fase-12--monitoreo-y-observabilidad](./README-TECH.md#fase-12--monitoreo-y-observabilidad) | Fase 12: kube-prometheus-stack (Prometheus/Grafana/AlertManager) + node-exporter hosts + alertas |
 | [incidentes/dr-restore.md](./incidentes/dr-restore.md) | Estrategia de disaster recovery: backups etcd redundantes en ambos masters + procedimientos de restauración (RPO/RTO) |
 | [04-Operaciones.md](./04-Operaciones.md) | Procedimiento de apagado y arranque controlado del cluster + scripts `scripts/D-lab_stop.sh` / `scripts/D-lab_start.sh` |
+| [files/backup-multimedia.sh](./files/backup-multimedia.sh) | Backup del stack multimedia (SQLite + ajustes) — cron en ambos masters |
 
 ---
 
@@ -647,7 +648,7 @@ Ejecutar en **D1** (no dentro del contenedor):
   sudo snap install kubectl --classic
   ```
 
-- [ ] Crear directorio kubeconfig y copiarlo desde el contenedor
+- [x] Crear directorio kubeconfig y copiarlo desde el contenedor
   ```bash
   mkdir -p $HOME/.kube
   sudo lxc exec k8s-master-1 -- cat /etc/kubernetes/super-admin.conf > $HOME/.kube/config
@@ -751,8 +752,7 @@ Ejecutar en `k8s-worker-1`:
       - "sha256:<HASH>"
   nodeRegistration:
     kubeletExtraArgs:
-      - name: "fail-swap-on"
-        value: "false"
+      fail-swap-on: "false"
   EOF
   kubeadm join --config=/tmp/kubeadm-join.yaml --ignore-preflight-errors=SystemVerification
   ```
@@ -1618,12 +1618,12 @@ Si algún servicio futuro se protege con la clave web, la verificación será: `
 **Objetivo**: exponer `elarreglador.eu` (y `www.elarreglador.eu`) como página de presentación **pública, sin credenciales**, alojada dentro del cluster en pods Kubernetes.
 
 **Dónde se aloja**:
-- **Fuente de verdad**: repositorio, `files/landing/` (`index.html`, `styles.css`, `acerca-de-ti.css`, `acerca-de-ti.js`, `*.svg`, `*.webp`, `*.woff2` — fuentes auto-alojadas).
+- **Fuente de verdad**: repositorio, `files/landing/` (`index.html`, `styles.css`, `acerca-de-ti.css`, `acerca-de-ti.js`, `*.svg`, `*.webp`).
 - **En el cluster**: un **ConfigMap `landing-html`** (vive en etcd) con todos los ficheros; el Deployment monta ese ConfigMap (solo lectura) en `/usr/share/nginx/html/` de los pods `landing` (nginx:alpine, 2 réplicas). Los pods son efímeros: si caen, el Deployment los recrea y re-montan el contenido desde etcd.
 - **Ruta**: `elarreglador.eu`/`www` → Ingress `elarreglador-landing` → Service `landing` (ClusterIP:80) → pods nginx. Sin anotaciones de auth.
 
 **Características de la página**:
-- Solo **HTML + CSS + JS** (CSS y JS en ficheros independientes `styles.css`, `acerca-de-ti.css`, `acerca-de-ti.js`), **sin assets externos**: imágenes locales (ficheros `.svg` y `.webp`) y tipografías auto-alojadas (`.woff2` en `files/landing/`, subset `latin`, `@font-face` en `styles.css`) servidas por el propio pod. El acerca-de-ti (`acerca-de-ti.js`, ~77 KB) es una sección de live-fingerprinting del visitante: al cargar recopila las señales en segundo plano y el dossier permanece oculto hasta que se pulsa el botón **«Mostrar más info»** (cian→magenta), momento en que se pinta completo de una sola vez (afirmaciones, embudo, huella, tabla en bruto). Los cajones «¿cómo?» y la tabla en bruto nacen plegados (esta última tras su mini-botón), y el mismo botón vuelve a ocultar el dossier. Los fallos de esas sondas degradan con elegancia y nunca rompen la página.
+- Solo **HTML + CSS + JS** (CSS y JS en ficheros independientes `styles.css`, `acerca-de-ti.css`, `acerca-de-ti.js`), **sin assets externos**: imágenes locales (ficheros `.svg` y `.webp`) servidas por el propio pod. El acerca-de-ti (`acerca-de-ti.js`, ~77 KB) es una sección de live-fingerprinting del visitante: al cargar recopila las señales en segundo plano y el dossier permanece oculto hasta que se pulsa el botón **«Mostrar más info»** (cian→magenta), momento en que se pinta completo de una sola vez (afirmaciones, embudo, huella, tabla en bruto). Los cajones «¿cómo?» y la tabla en bruto nacen plegados (esta última tras su mini-botón), y el mismo botón vuelve a ocultar el dossier. Los fallos de esas sondas degradan con elegancia y nunca rompen la página.
 - **Fotografía generada por IA** (pollinations.ai, optimizada a WebP 800px, ~10 KB): `hero.webp` como foto del hero. Sin info sensible; se trata como el resto de la web. (Las anteriores `iot.webp`/`rack.webp`/`control.webp` se retiraron el 2026-08-01 por decisión del señor.)
 - **Tema con conmutador manual** (2026-08-17): estética **«GitHub» (sistema de diseño Primer)** — plana y neutra, sin gradientes, resplandores, rejillas ni sombras. Paleta **GitHub dark** (`#0d1117` fondo, `#161b22` superficie, acento azul `#2f81f7`, verde `#3fb950`) y **GitHub light** (`#ffffff`, acento `#0969da`, verde `#1a7f37`). **Tipografías de sistema** (sin fuentes auto-alojadas: `--font-sans`/`--font-display` = pila del sistema; `--font-mono` = pila mono estándar), botones planos con borde y hover, tarjetas con borde sutil que se ilumina en azul al pasar el ratón, título con barra plana azul. Al cargar se usa **el tema por defecto del sistema** (`prefers-color-scheme`). El botón de la cabecera permite forzar claro/oscuro; la elección se persiste en `localStorage` (`theme`) solo al pulsarlo y se aplica con `data-theme` en `<html>` y el `meta color-scheme` (script anti-flash en `<head>`). Sin JS la página sigue al sistema vía media query.
 - **Responsive** (grid `auto-fit`, `clamp()` en tipografías, media queries para móvil) y accesible (HTML semántico, `lang="es"`, `alt`, skip-link, `prefers-reduced-motion`).
@@ -1634,20 +1634,19 @@ Si algún servicio futuro se protege con la clave web, la verificación será: `
 ```bash
 ./scripts/deploy-landing.sh
 ```
-El script construye el ConfigMap `landing-html` desde `files/landing/` (claves planas: `index.html`, `styles.css`, `acerca-de-ti.*`, `*.svg`, `*.webp`, `*.woff2` — ConfigMap no admite `/` en las claves, por eso las fuentes viven en raíz y no en una subcarpeta `fonts/`). Todas las claves se escriben en `binaryData` (base64), incluidos los ficheros de texto, por simplicidad del generador; los pods las montan igualmente como ficheros. Aplica ConfigMap + Deployment/Service + Ingress vía `ssh server` con **`kubectl apply --server-side`** (con client-side, el contenido del ConfigMap —~300 KB base64— se duplica en la anotación `last-applied-configuration`, que tiene su propio tope de 256 KiB y rechazaba el apply; ver [Límite y fallback](#límite-y-fallback)), reiniciando los pods para forzar la carga del contenido. **Cache-busting**: el `index.html` referencia `styles.css`, `acerca-de-ti.css` y `acerca-de-ti.js` con `?v=YYYYMMDD`; al cambiar la web hay que subir esa versión para que los navegadores no sirvan CSS/JS antiguos de caché (nginx stock no envía `Cache-Control` y el navegador usa heurística con `Last-Modified`/`ETag`).
+El script construye el ConfigMap `landing-html` desde `files/landing/` (claves planas: `index.html`, `styles.css`, `acerca-de-ti.*`, `*.svg`, `*.webp` — ConfigMap no admite `/` en las claves). Todas las claves se escriben en `binaryData` (base64), incluidos los ficheros de texto, por simplicidad del generador; los pods las montan igualmente como ficheros. Aplica ConfigMap + Deployment/Service + Ingress vía `ssh server` con **`kubectl apply --server-side`** (con client-side, el contenido del ConfigMap —~180 KB base64— se duplica en la anotación `last-applied-configuration`, que tiene su propio tope de 256 KiB y rechazaba el apply; ver [Límite y fallback](#límite-y-fallback)), reiniciando los pods para forzar la carga del contenido. **Cache-busting**: el `index.html` referencia `styles.css`, `acerca-de-ti.css` y `acerca-de-ti.js` con `?v=YYYYMMDD`; al cambiar la web hay que subir esa versión para que los navegadores no sirvan CSS/JS antiguos de caché (nginx stock no envía `Cache-Control` y el navegador usa heurística con `Last-Modified`/`ETag`).
 
 **Verificación**:
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://elarreglador.eu    # 200 sin credenciales
 curl -s -o /dev/null -w '%{http_code}\n' https://www.elarreglador.eu # 200
 curl -s -o /dev/null -w '%{http_code}\n' https://elarreglador.eu/styles.css  # 200 (assets locales)
-curl -s -o /dev/null -w '%{http_code}\n' https://elarreglador.eu/orbitron.woff2   # 200 (fuentes auto-alojadas; verificado 2026-08-17)
 curl -s -o /dev/null -w '%{http_code}\n' https://elarreglador.eu/acerca-de-ti.js # 200 (acerca-de-ti; verificado 2026-08-16)
 ```
 
 **Nota**: la imagen `nginx:alpine` stock requiere root (entrypoint y cachés), por lo que el pod no cumple el perfil PSA `restricted` (solo `warn` en este namespace; `enforce: baseline` sí se cumple). Para `restricted` habría que servir con imagen no-root (p. ej. puerto 8080 + usuario `nginx`), fuera de alcance para una landing estática.
 
-**Límite y fallback**: dos techos independientes. (1) El **ConfigMap no puede superar el límite de petición de etcd** (~1,5 MiB por objeto; el cluster no define `--max-request-bytes`, así que aplica el default). El script `deploy-landing.sh` avisa desde ~0,9 MiB en base64 y aborta cerca del techo (~1,35 MiB, margen por overhead YAML) con un mensaje claro. (2) La **anotación `kubectl.kubernetes.io/last-applied-configuration`** del client-side apply tiene su propio tope de 256 KiB; con el contenido actual (~296 KB en base64, verificado 2026-08-17, 222 KB raw incluyendo las fuentes) ese tope se superaba y el apply era rechazado (`metadata.annotations: Too long`), por eso el script usa `--server-side` (guarda `managedFields` en lugar de duplicar los datos). Con el contenido actual queda holgado en ambos techos. Si algún día la web creciera más allá del límite, se migra a **imagen nginx custom**: `Dockerfile` (nginx:alpine + `COPY` de `files/landing/`), build en DV0 con docker, importar en cada nodo (`docker save | lxc exec k8s-master-1 -- ctr images import`, idem workers) y `imagePullPolicy: IfNotPresent` en el Deployment.
+**Límite y fallback**: dos techos independientes. (1) El **ConfigMap no puede superar el límite de petición de etcd** (~1,5 MiB por objeto; el cluster no define `--max-request-bytes`, así que aplica el default). El script `deploy-landing.sh` avisa desde ~0,9 MiB en base64 y aborta cerca del techo (~1,35 MiB, margen por overhead YAML) con un mensaje claro. (2) La **anotación `kubectl.kubernetes.io/last-applied-configuration`** del client-side apply tiene su propio tope de 256 KiB; con el contenido actual (~180 KB en base64, verificado 2026-08-17, ~135 KB raw) ese tope no se supera y el apply con `--server-side` guarda `managedFields` en lugar de duplicar los datos. Con el contenido actual queda holgado en ambos techos. Si algún día la web creciera más allá del límite, se migra a **imagen nginx custom**: `Dockerfile` (nginx:alpine + `COPY` de `files/landing/`), build en DV0 con docker, importar en cada nodo (`docker save | lxc exec k8s-master-1 -- ctr images import`, idem workers) y `imagePullPolicy: IfNotPresent` en el Deployment.
 
 ---
 

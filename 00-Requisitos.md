@@ -1,5 +1,7 @@
 # Requisitos para Cluster Kubernetes con LXC
 
+> **⚠️ DOCUMENTO PARCIALMENTE HISTÓRICO** — Este archivo describe el cluster inicial de 2 contenedores (D1 control-plane, D2 worker) y contradice el estado real (4 contenedores: k8s-master-1/2, k8s-worker-1/2). Para el estado actual autoritativo, consultar [README-TECH.md](./README-TECH.md) y [03-Aplicaciones.md](./03-Aplicaciones.md).
+
 ## Descripción General
 
 Este documento detalla los requisitos necesarios para crear un cluster Kubernetes bajo máquinas virtuales LXC. El cluster estará compuesto por dos nodos físicos Dell OptiPlex 3050 Micro: **D1** (control-plane) y **D2** (worker).
