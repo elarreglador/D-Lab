@@ -7,9 +7,11 @@ KUBECTL_HOST="${KUBECTL_HOST:-server}"
 CONFIGMAP=landing-html
 
 # Staging: copia del contenido con el placeholder del public dashboard resuelto.
-# index.html lleva src="__PUBLIC_DASHBOARD_URL__?theme=dark&from=now-1h&to=now"; aquí se
+# index.html lleva src="__PUBLIC_DASHBOARD_URL__?theme=dark&from=now-24h&to=now"; aquí se
 # sustituye por la URL pública del dashboard 'Sistema D-Lab' (info_sensible/public-dashboard.env,
 # gitignored, generado por scripts/ensure-public-dashboard.sh).
+# Ojo: el public dashboard (timeSelectionEnabled=false) ignora from/to de la URL y usa el rango
+# guardado del dashboard; la ventana efectiva se fija en files/monitoring/grafana-dashboard-sistema-dlab.yaml.
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 

@@ -177,6 +177,9 @@ a:hover {
   width: 32px;
   height: 32px;
   border-radius: 6px;
+  /* El SVG usa stroke currentColor, que en un <img> resuelve a negro; la
+     barra superior es siempre oscura (ambos temas), así que lo invertimos. */
+  filter: invert(1);
 }
 
 .nav-links {
