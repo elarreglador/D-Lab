@@ -22,6 +22,7 @@ Vault de documentación (Obsidian) + scripts de despliegue del laboratorio caser
 | DV0 | VM IONOS: jumpbox, VPN, nginx | — | 10.8.0.1 |
 | D1 | OptiPlex: k8s-master-1 (.21) + k8s-worker-1 (.31) | 192.168.1.11 | 10.8.0.11 |
 | D2 | OptiPlex: k8s-master-2 (.22) + k8s-worker-2 (.32) | 192.168.1.12 | 10.8.0.12 |
+| G9 | Portátil (cliente WG) | 192.168.1.102 | 10.8.0.100 |
 
 - SSH en puerto **9622** (no 22). Acceso externo solo vía DV0 (WireGuard).
 - CNI: Flannel (overlay) + Calico policy-only. Almacenamiento: GlusterFS + NFS-Ganesha + VIP `192.168.1.30` (Keepalived).

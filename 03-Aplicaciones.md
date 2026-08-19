@@ -178,6 +178,100 @@ Facade de peticiones (Jellyseerr) → organizadores (Sonarr/Radarr) → rastreo 
   - **Nota** `(verificado 2026-08-10)`: el cron debe vivir en `/etc/cron.d/mariadb-backup` con el campo de usuario `root`; si se mete en el crontab de usuario (`crontab -e`) el `root` se interpreta como comando y el backup falla cada noche (`/bin/sh: 1: root: not found`). Requiere `/root/.kube/config` en **ambos** masters (kubeconfig `admin.conf`) para que `kubectl` llegue al API Server.
 - **Despliegue**: `MARIADB_ROOT_PASSWORD=<clave> MARIADB_PASSWORD=<clave> ./scripts/deploy-mariadb.sh` (las claves solo en el entorno; el Secret se genera por stdin).
 
+## Modelo de lenguaje local (Ollama + qwen2.5-coder)
+
+LLM de código abierto autoalojado para uso con opencode y Node-RED. Namespace `ia`.
+
+- **Workload**: Deployment `ollama` (1 réplica, imagen `ollama/ollama:0.32.14`, pin fijo), **solo en los workers** vía `nodeSelector` (`eu.elarreglador/worker=true`). Modelo `qwen2.5-coder:3b` (Q4_K_M, 1.9 GB, contexto 32 768) descargado en el despliegue y persistente en el PVC.
+- **Acceso** (sin autenticación a propósito; la protección es por aislamiento de red):
+  - Interno (Node-RED): `http://ollama.ia.svc:11434`
+  - LAN: `http://192.168.1.31:31434` (NodePort en cualquier nodo; `.32` también responde)
+  - WireGuard: `http://10.8.0.11:31434` (LXC proxy device `proxyollama` en D1: `10.8.0.11:31434 → 127.0.0.1:31434`)
+- **Ollama no autentica peticiones por defecto** (la `OLLAMA_API_KEY` solo aplica a ollama.com). Si algún día se necesita, la protección razonable es una capa previa (p. ej. nginx stream con Bearer en DV0), no esperar auth nativa.
+- **Almacenamiento**: PVC `ollama-models` (20Gi, RWO, `nfs-storage`) montado en `/models` (`OLLAMA_MODELS=/models`).
+- **Parámetros** (env del Deployment): `OLLAMA_HOST=0.0.0.0`, `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_KEEP_ALIVE=5m`, `HOME=/tmp` (el contenedor corre como uid 1000 con `readOnlyRootFilesystem`).
+- **Recursos**: requests 500m/1Gi, limits 2 CPU/4Gi. **Tope por pod**: 2 CPU es lo que hay disponible de margen real en los workers (~20% libre sobre 7.1 GiB); para un modelo más grande (7B+) habría que subir el límite y evaluar que no ahogue al cluster. **Nota (2026-08-18)**: el límite de memoria subió de 3Gi a 4Gi durante el benchmark de tareas de programación — con 3Gi, cargar modelos de 2-3 GB junto con la KV cache (4096 ctx ≈ 1.28 GB) hacía que el **liveness probe (timeout 1 s)** matase el pod en cada carga (eventos `Liveness probe failed ... connection refused`); se subió el `timeoutSeconds` de las probes a 5 (startup/readiness/liveness, failureThreshold 5 en liveness).
+- **Benchmark de modelos ≤3B (2026-08-18)**: se probaron 8 modelos en el pod con sus límites reales (2 CPU/3 Gi, CPU i3-7100T). Metodología: para cada modelo `ollama pull` → consulta fría (carga a RAM, descartada) → **consulta caliente** con el prompt *«Responde con una sola palabra: pong»* (`/api/chat`, `stream:true`), midiendo time-to-first-token (TTFT) y tiempo total con un pod helper `curl` (curlimages/curl, ns `ia`). Tras medir se ejecutó `ollama rm`.
+
+  | Modelo | Tamaño | TTFT (s) | Total (s) | Resultado |
+  |--------|--------|----------|-----------|-----------|
+  | tinyllama:1.1b | 0.6 GB | 0.212 | **0.531** | ✓ dentro del corte |
+  | qwen2.5-coder:1.5b | 1.0 GB | 0.427 | **0.586** | ✓ |
+  | qwen2.5:1.5b | 1.0 GB | 0.431 | **0.623** | ✓ |
+  | qwen2.5-coder:3b | 1.9 GB | 0.569 | **1.009** | ✓ elegido |
+  | gemma2:2b | 1.6 GB | 0.802 | **1.216** | ✓ |
+  | llama3.2:3b | 2.0 GB | 0.613 | 6.195 | ✗ supera 5 s (genera largo, ~5 tok/s) |
+  | qwen3:4b | 2.5 GB | — | — | ✗ descartado (reiniciaba el pod) |
+  | phi3:mini | 2.2 GB | — | — | ✗ descartado (reiniciaba el pod) |
+
+  Criterio: tiempo de respuesta total ≤ 5 s. **qwen3:4b y phi3:mini se descartaron por inestabilidad**: al cargarlos (2.2-2.5 GB) el daemon tarda en responder y el **liveness probe (`timeoutSeconds: 1`)** mata el pod (`kubectl get events` → `Liveness probe failed ... connection refused`; `restartCount` sube). Los 5 que pasan el corte dan TTFT ≤ 0.8 s. La medición se hizo sobre el pod con sus límites reales, no sobre el host completo, para que los tiempos reflejen el entorno de uso (opencode/Node-RED).
+- **Benchmark de tarea de programación (2026-08-18)**: a los 6 candidatos que pasaron/entraron en el corte anterior (qwen2.5-coder:3b, granite-code:3b, llama3.2:3b, yi-coder:1.5b, deepseek-coder:1.3b, smollm2:1.7b) se les pidió implementar, en cada lenguaje, un **evaluador de expresiones aritméticas** (enteros, `+ - * /` división entera, paréntesis, precedencia; leer de stdin, imprimir resultado). Prompt idéntico en castellano por lenguaje, sin mencionar prácticas/tests/seguridad. Proceso por lenguaje/modelo: `ollama pull` → warm-up (descartado, carga a RAM) → petición medida (`stream:false`, `keep_alive:0`, TTFT+total por `curl`) → **extracción del bloque de código y compilación/ejecución real en G9** (`dart`, `gcc`, `python3`, `bash`, `node`, `javac`/`java`), validando la salida contra un corpus fijo (p. ej. `2 + 3 * 4` → 14, `(2+3)*4` → 20, `10 / 4` → 2, `2*(3+4)/7` → 2, `8 / 2 * 2` → 8). Criterio **`Funciona?` = compila y produce el resultado esperado**; si no, las demás columnas quedan `-`. **Prompts, corpus y metodología completos en [`Benchmark-LLM.md`](Benchmark-LLM.md)**. Resultados preliminares **Dart** (ronda 1, con Rust fallido en paralelo — los dos lenguajes a la vez degradaban la calidad, así que se repitió solo Dart): **ningún modelo ≤3B generó Dart válido** (el más cercano, qwen2.5-coder:3b, con lógica de precedencia correcta pero `Stack` inexistente en la stdlib de Dart + nullability; el resto, APIs/sintaxis inventadas o esqueletos).
+
+  | Modelo | Lenguaje | Funciona? | Estabilidad | CiberSeguridad | Buenas prácticas | Tests | Tiempo (s) |
+  |--------|----------|-----------|-------------|----------------|-------------------|-------|------------|
+  | qwen2.5-coder:3b | Dart | No | — | — | — | — | 67.8 |
+  | granite-code:3b | Dart | No | — | — | — | — | 27.3 |
+  | llama3.2:3b | Dart | No | — | — | — | — | 132.3 |
+  | yi-coder:1.5b | Dart | No | — | — | — | — | 38.8 |
+  | deepseek-coder:1.3b | Dart | No | — | — | — | — | 29.7 |
+  | smollm2:1.7b | Dart | No | — | — | — | — | 92.6 |
+
+  **Ronda completa (2026-08-19)** — C, Python, bash, JS y Java (misma tarea y corpus). En esta ronda el pod ollama ya tenía el límite de 4 GiB y las probes con timeout 5 s; cada petición se midió con `keep_alive:0`, así que el **tiempo incluye la carga del modelo** en cada una (TTFT ≈ TOTAL). Resultado: **un solo caso funcional de 30 — yi-coder:1.5b en JS, y usando `eval()`** (lee el stdin con `readFileSync('/dev/stdin')` y lo evalúa directamente): pasa el corpus 10/10, pero es una **RCE (ejecución de código arbitrario)** desde la entrada → valor CiberSeguridad 1/10. Ningún otro modelo+lenguaje produjo un evaluador correcto; fallos dominantes: código incompleto/fragmentado (granite, smollm2), `eval`/APIs inventadas (yi-coder, deepseek, smollm2), y precedencia o división entera mal resueltas en los que sí compilaban (qwen2.5-coder en C/Python, deepseek en Python con división real).
+
+  | Modelo | Lenguaje | Funciona? | Estabilidad | CiberSeguridad | Buenas prácticas | Tests | Tiempo (s) |
+  |--------|----------|-----------|-------------|----------------|-------------------|-------|------------|
+  | qwen2.5-coder:3b | C | No | — | — | — | — | 92.8 |
+  | qwen2.5-coder:3b | Python | No | — | — | — | — | 97.4 |
+  | qwen2.5-coder:3b | bash | No | — | — | — | — | 33.0 |
+  | qwen2.5-coder:3b | JS | No | — | — | — | — | 95.2 |
+  | qwen2.5-coder:3b | Java | No | — | — | — | — | 108.2 |
+  | granite-code:3b | C | No | — | — | — | — | 59.7 |
+  | granite-code:3b | Python | No | — | — | — | — | 45.0 |
+  | granite-code:3b | bash | No | — | — | — | — | 48.2 |
+  | granite-code:3b | JS | No | — | — | — | — | 67.1 |
+  | granite-code:3b | Java | No | — | — | — | — | 62.9 |
+  | llama3.2:3b | C | No | — | — | — | — | 504.7 |
+  | llama3.2:3b | Python | No | — | — | — | — | 92.3 |
+  | llama3.2:3b | bash | No | — | — | — | — | 58.4 |
+  | llama3.2:3b | JS | No | — | — | — | — | 133.2 |
+  | llama3.2:3b | Java | No | — | — | — | — | 95.3 |
+  | yi-coder:1.5b | C | No | — | — | — | — | 37.8 |
+  | yi-coder:1.5b | Python | No | — | — | — | — | 58.2 |
+  | yi-coder:1.5b | bash | No | — | — | — | — | 22.9 |
+  | yi-coder:1.5b | **JS** | **Sí** | 10 | **1** (eval = RCE) | No | No | 24.9 |
+  | yi-coder:1.5b | Java | No | — | — | — | — | 74.5 |
+  | deepseek-coder:1.3b | C | No | — | — | — | — | 99.2 |
+  | deepseek-coder:1.3b | Python | No | — | — | — | — | 32.6 |
+  | deepseek-coder:1.3b | bash | No | — | — | — | — | 51.1 |
+  | deepseek-coder:1.3b | JS | No | — | — | — | — | 33.8 |
+  | deepseek-coder:1.3b | Java | No | — | — | — | — | 79.8 |
+  | smollm2:1.7b | C | No | — | — | — | — | 91.3 |
+  | smollm2:1.7b | Python | No | — | — | — | — | 63.5 |
+  | smollm2:1.7b | bash | No | — | — | — | — | 46.1 |
+  | smollm2:1.7b | JS | No | — | — | — | — | 75.3 |
+  | smollm2:1.7b | Java | No | — | — | — | — | 104.0 |
+
+  **Conclusión del benchmark de programación**: ningún modelo ≤ 3B es fiable para generar código de esa complejidad en 6 lenguajes; el único acierto (yi-coder JS) es además un antipatrón de seguridad. Para el uso real (opencode), **qwen2.5-coder:3b sigue siendo la mejor opción** por su calidad relativa de código y tiempos razonables — asumiendo que se **revisa siempre el código generado** (los fallos de precedencia en C/Python lo demuestran). Los tiempos aquí (30-500 s) no son comparables a los del ping (0.5-6 s): la tarea de programación genera 1-9 KB de tokens y en cada petición se recarga el modelo. **Los 6 modelos probados se conservan descargados en el PVC** (decisión 2026-08-19). Tablas, prompts y corpus completos en [`Benchmark-LLM.md`](Benchmark-LLM.md).
+- **Hardening** (`files/ia/ollama.yaml`): `runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, capabilities `drop: ALL`, seccomp `RuntimeDefault`. Namespace `ia` con PSS `baseline` (enforce) / `restricted` (warn).
+- **NetworkPolicy** (`files/ia/networkpolicy.yaml`): `ollama-allow` — ingress TCP/11434 desde el namespace `pods` (ClusterIP, para Node-RED) **y** desde cualquier origen (el tráfico NodePort entra DNAT desde el nodo). Egress solo DNS + **TCP/443 a los rangos de Cloudflare** (`104.16.0.0/12`, `172.64.0.0/13`, `173.245.48.0/20`, `198.41.128.0/17`, `190.93.240.0/20`, `188.114.96.0/20`): necesarios para que `ollama pull` funcione — `registry.ollama.ai` (manifests) y `*.r2.cloudflarestorage.com` (blobs, Cloudflare R2). **Gotcha verificado 2026-08-18**: sin esa regla el pull muere con `dial tcp 172.64.x.x:443: i/o timeout` tras bajar el manifest.
+- **Quota** (`files/ia/quota.yaml`): ResourceQuota `ia-quota` (requests 4 CPU/8Gi, limits 8 CPU/16Gi, 3 pods, 2 PVC) + LimitRange (default 100m/128Mi request, 500m/512Mi limit).
+- **Probes**: startup/readiness/liveness con `httpGet /api/tags` (el endpoint responde 200 con el daemon listo; el modelo se carga bajo demanda en la primera petición).
+- **Acceso LAN**: el Service es `NodePort 31434` (no MetalLB, a diferencia del stack multimedia). Motivo: el NodePort se reenvía por kube-proxy a cualquier worker y funciona desde cualquier nodo; verificado 200 desde `192.168.1.31` y `.32`.
+- **Despliegue**: `./scripts/deploy-ollama.sh` (etiqueta los workers `eu.elarreglador/worker=true` idempotente, aplica `files/ia/`, espera rollout y descarga el modelo con `ollama pull`).
+- **Problema de descarga del modelo por SSH**: `kubectl exec` corta el `ollama pull` si la sesión SSH muere (SIGHUP); si hay que relanzarlo, `nohup kubectl -n ia exec deploy/ollama -- ollama pull qwen2.5-coder:3b > /tmp/ollama-pull.log 2>&1 &`.
+- **Seguridad**: Ollama tiene CVE conocidos (p. ej. CVE-2025-15063, RCE en el servidor MCP, CVSS 9.8). Mitigación: imagen pinnada a la última estable (`0.32.14`), hardening del pod, y **ninguna exposición pública** (solo LAN/WG). Antes de subir la imagen, revisar CVE en [GitHub Advisory DB](https://github.com/advisories?query=ollama).
+
+### opencode en el portátil (G9)
+
+Config global `~/.config/opencode/opencode.jsonc` con dos providers `@ai-sdk/openai-compatible`:
+
+| Provider | baseURL | Cuándo |
+|----------|---------|--------|
+| `ollama-lan` | `http://192.168.1.31:31434/v1` | G9 en la LAN doméstica |
+| `ollama-wg` | `http://10.8.0.11:31434/v1` | G9 fuera de casa (WireGuard) |
+
+Modelo: `qwen2.5-coder:3b`, `limit.context 32768`, `limit.output 8192`. Uso: `opencode run "..." --model ollama-lan/qwen2.5-coder:3b`. Verificado 2026-08-18 con respuestas reales por ambos providers.
+
 ## Exposición pública
 
 | Host | App | Protección |
@@ -186,13 +280,13 @@ Facade de peticiones (Jellyseerr) → organizadores (Sonarr/Radarr) → rastreo 
 | `grafana.elarreglador.eu` | Grafana | login de Grafana |
 | `nodered.elarreglador.eu` | Node-RED | login propio de Node-RED |
 | `sdr.elarreglador.eu:1234` | Radio SDR (rtl_tcp, GQRX) | ninguna (recepción abierta; un cliente a la vez) |
-| prometheus / alertmanager / **mariadb** | — | internos (sin ingress) |
+| prometheus / alertmanager / **mariadb** / **ollama** | — | internos (sin ingress; ollama solo LAN/WG, sin auth) |
 | `192.168.1.50` … `.60` | IPs LAN (MetalLB, pool `.50–.64`) | ver mapa de IPs en el stack multimedia y notas de cada app; solo LAN |
 
 ## PDBs y NetworkPolicies
 
 - **PDBs** (manifiestos en `files/pdbs/`): `landing`, `coredns`, `ingress-nginx`, `calico-kube-controllers`, `calico-typha`, `grafana`, `prometheus`, `alertmanager`.
-- **NetworkPolicies** (manifiestos en `files/networkpolicies/`, `files/mariadb/networkpolicy.yaml`, `files/nodered/networkpolicy.yaml`, `files/sdr/networkpolicy.yaml`, `files/multimedia/networkpolicy-*.yaml`): `landing-allow-ingress-nginx` (default, app=landing), `coredns-allow-dns` (kube-system), `mariadb-allow-pods`, `nodered-allow-ingress-nginx`, `rtlsdr-allow`, `media-public` (Jellyfin/Jellyseerr, `ipBlock: 192.168.1.0/24`), `multimedia-internal` (Sonarr/Radarr/Prowlarr/qB WebUI, LAN `192.168.1.0/24`) y `es-badge-ingress` (ingress-nginx → es-badge:80). El resto del tráfico se rige por el modelo policy-only de Calico. Las de acceso LAN (`landing`, `nodered`, `media-public`, `multimedia-internal`) se ampliaron para permitir `192.168.1.0/24` y solo funcionan si el Service LoadBalancer usa `externalTrafficPolicy: Local` (si no, kube-proxy aplica SNAT y la IP origen vista es la del nodo).
+- **NetworkPolicies** (manifiestos en `files/networkpolicies/`, `files/mariadb/networkpolicy.yaml`, `files/nodered/networkpolicy.yaml`, `files/sdr/networkpolicy.yaml`, `files/ia/networkpolicy.yaml`, `files/multimedia/networkpolicy-*.yaml`): `landing-allow-ingress-nginx` (default, app=landing), `coredns-allow-dns` (kube-system), `mariadb-allow-pods`, `nodered-allow-ingress-nginx`, `rtlsdr-allow`, `ollama-allow`, `media-public` (Jellyfin/Jellyseerr, `ipBlock: 192.168.1.0/24`), `multimedia-internal` (Sonarr/Radarr/Prowlarr/qB WebUI, LAN `192.168.1.0/24`) y `es-badge-ingress` (ingress-nginx → es-badge:80). El resto del tráfico se rige por el modelo policy-only de Calico. Las de acceso LAN (`landing`, `nodered`, `media-public`, `multimedia-internal`) se ampliaron para permitir `192.168.1.0/24` y solo funcionan si el Service LoadBalancer usa `externalTrafficPolicy: Local` (si no, kube-proxy aplica SNAT y la IP origen vista es la del nodo).
 
 ## Notas operativas
 
@@ -200,7 +294,7 @@ Facade de peticiones (Jellyseerr) → organizadores (Sonarr/Radarr) → rastreo 
 - **Credenciales**: nunca en el repo. Grafana → usuario `elarreglador` (garantizado por `scripts/grafana-user.sh`; passwords en `info_sensible/grafana-user.env`, gitignored) y `admin` (Secret `kube-prometheus-stack-grafana`). Clave web / secretos → `info_sensible/` (gitignored).
 - **sudo en DV0/D1/D2** (`verificado 2026-08-18`): el usuario `elarreglador` tiene `NOPASSWD: ALL` vía `/etc/sudoers.d/elarreglador-nopasswd` (antes solo `poweroff`/`systemctl`/`true` sin password). Se amplió para poder instalar/administrar agentes de monitoreo y gestionar unidades systemd remotas por SSH sin TTY. La password de sudo (no va al repo) sigue siendo la que define el señor en cada máquina.
 - **CNI Calico — tokens de `calico-kubeconfig`**: el token del SA `calico-cni-plugin` usado por el plugin CNI en los 4 nodos (`/etc/cni/net.d/calico-kubeconfig`) **expira** (el emitido por kubeadm el 2026-08-01 caducó a las 24 h y todos los pods nuevos fallaban con `error getting ClusterInformation: ... Unauthorized`). Se fijó creando el Secret `calico-cni-plugin-token` (kube-system, anotación `kubernetes.io/service-account.name`) — sin expiración — y reescribiendo el `token:` de ese kubeconfig en los 4 nodos (`verificado 2026-08-15`; se renovó de nuevo con el static secret y el rollout de Radarr completó). Si vuelve a aparecer `FailedCreatePodSandBox` por Calico en pods nuevos, revisar la fecha de expiración de ese token: el proceso manual es copia de seguridad del kubeconfig, descarga del Secret de token estático y reescritura del campo `token` (`kubectl get secret calico-cni-plugin-token -n kube-system -o jsonpath='{.data.token}' | base64 -d`), en cada nodo.
-- **Scripts útiles** (`scripts/`): `deploy-landing.sh` (despliegue de la landing), `deploy-nodered.sh` (despliegue de Node-RED; requiere `NODERED_PASSWORD` en el entorno), `deploy-mariadb.sh` (despliegue de MariaDB; requiere `MARIADB_ROOT_PASSWORD` y `MARIADB_PASSWORD` en el entorno), `deploy-sdr.sh` (despliegue del servidor rtl_tcp; etiqueta k8s-worker-1 y aplica `files/sdr/`), `sync-web-auth.sh` (clave web; hoy **sin namespaces por defecto** — Grafana y Node-RED usan su propio login), `grafana-user.sh` (garantiza el usuario `elarreglador` de Grafana; lee las credenciales de `info_sensible/grafana-user.env`, gitignored), `ensure-public-dashboard.sh` (garantiza el public dashboard «Sistema D-Lab» tras recrear el pod; guarda la URL en `info_sensible/public-dashboard.env`), `computer_info.sh`.
+- **Scripts útiles** (`scripts/`): `deploy-landing.sh` (despliegue de la landing), `deploy-nodered.sh` (despliegue de Node-RED; requiere `NODERED_PASSWORD` en el entorno), `deploy-mariadb.sh` (despliegue de MariaDB; requiere `MARIADB_ROOT_PASSWORD` y `MARIADB_PASSWORD` en el entorno), `deploy-sdr.sh` (despliegue del servidor rtl_tcp; etiqueta k8s-worker-1 y aplica `files/sdr/`), `deploy-ollama.sh` (despliegue del LLM local; etiqueta los workers y aplica `files/ia/`), `sync-web-auth.sh` (clave web; hoy **sin namespaces por defecto** — Grafana y Node-RED usan su propio login), `grafana-user.sh` (garantiza el usuario `elarreglador` de Grafana; lee las credenciales de `info_sensible/grafana-user.env`, gitignored), `ensure-public-dashboard.sh` (garantiza el public dashboard «Sistema D-Lab» tras recrear el pod; guarda la URL en `info_sensible/public-dashboard.env`), `computer_info.sh`.
 
 ## Referencias
 

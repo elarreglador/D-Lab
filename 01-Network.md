@@ -175,7 +175,7 @@ DNS = 10.8.0.1,1.8.0.1
 PublicKey = <SERVER_PUBLIC_KEY>
 PresharedKey = <PRESHARED_KEY_D1>
 Endpoint = 82.223.50.169:51820
-AllowedIPs = 10.8.0.1/32
+AllowedIPs = 10.8.0.0/24, fd42:42:42::/64
 PersistentKeepalive = 25
 ```
 
@@ -191,11 +191,26 @@ DNS = 10.8.0.1,1.8.0.1
 PublicKey = <SERVER_PUBLIC_KEY>
 PresharedKey = <PRESHARED_KEY_D2>
 Endpoint = 82.223.50.169:51820
-AllowedIPs = 10.8.0.1/32
+AllowedIPs = 10.8.0.0/24, fd42:42:42::/64
 PersistentKeepalive = 25
 ```
 
-> **Nota**: `AllowedIPs = 10.8.0.1/32` implementa **split-tunnel** (solo tráfico hacia DV0 por el túnel). El antiguo `0.0.0.0/0` (full-tunnel) causaba bucles de ruteo e interrupciones de internet en D1/D2 cuando WG caía. Ver [WireGuard: Estabilidad y Split-Tunnel](#wireguard-estabilidad-y-split-tunnel).
+#### G9 portátil (`files/wg0-client-g9.conf`)
+
+```ini
+[Interface]
+PrivateKey = <PRIVATE_KEY_G9>
+Address = 10.8.0.100/24, fd42:42:42::100/128
+
+[Peer]
+PublicKey = <SERVER_PUBLIC_KEY>
+PresharedKey = <PRESHARED_KEY_G9>
+Endpoint = elarreglador.eu:51820
+AllowedIPs = 10.8.0.1/32, 10.8.0.11/32, 10.8.0.12/32
+PersistentKeepalive = 25
+```
+
+> **Nota (actualizada 2026-08-18)**: `AllowedIPs` en **D1/D2** pasó de `10.8.0.1/32` a `10.8.0.0/24, fd42:42:42::/64` (en **servidor y clientes**). Motivo: habilitar **hub-and-spoke** — G9 (10.8.0.100) y otros peers de la VPN deben poder hablar entre sí *a través de DV0*. Con el valor antiguo, D1/D2 solo aceptaban tráfico cuyo origen fuera `10.8.0.1` y no tenían ruta de vuelta, así que los paquetes de G9 reenviados por el servidor se descartaban (handshake ok, pero timeout al conectar). La corrección se aplicó con `sed` sobre `/etc/wireguard/wg0.conf` de D1/D2 **y** la ruta se añadió a mano (`ip route add 10.8.0.0/24 dev wg0`) — ojo: `wg syncconf` **no** toca la tabla de rutas; `wg-quick up` (reinicio) sí la regeneraría. El cambio es seguro: la subred 10.8.0.0/24 es privada del túnel y D1/D2 siguen con **split-tunnel** (su default route queda intacta; solo lo 10.8.0.0/24 entra por wg0). G9 usa split-tunnel estricto (`AllowedIPs` solo las IPs de la VPN que necesita, sin DNS) para no interferir con la LAN doméstica. Ver [WireGuard: Estabilidad y Split-Tunnel](#wireguard-estabilidad-y-split-tunnel).
 
 ## Aplicación de la Configuración
 
@@ -483,9 +498,15 @@ AllowedIPs = 10.8.0.11/32, fd42:42:42::11/128, 192.168.1.11/32, 192.168.1.21/32,
 [Peer]
 PublicKey = <PUBKEY_D2>
 AllowedIPs = 10.8.0.12/32, fd42:42:42::12/128, 192.168.1.12/32, 192.168.1.22/32, 192.168.1.32/32
+
+### Client G9 (portátil)
+[Peer]
+PublicKey = <PUBKEY_G9>
+PresharedKey = <PRESHARED_KEY_G9>
+AllowedIPs = 10.8.0.100/32, fd42:42:42::100/128
 ```
 
-Las IPs `.21/.22` (masters) y `.30/.31/.32` (VIP + workers) se anuncian en el peer correspondiente (D1 o D2) para que DV0 las alcance a través del túnel.
+Las IPs `.21/.22` (masters) y `.30/.31/.32` (VIP + workers) se anuncian en el peer correspondiente (D1 o D2) para que DV0 las alcance a través del túnel. G9 se registró el 2026-08-18 (peer nuevo, sin IPs LAN: G9 solo necesita las IPs de la VPN).
 
 Además, se añade una ruta estática en DV0 (con `replace` para que sea idempotente en el `PostUp`):
 
@@ -498,6 +519,7 @@ Aplicar en caliente:
 ```bash
 wg set wg0 peer <PUBKEY_D1> allowed-ips 10.8.0.11/32,fd42:42:42::11/128,192.168.1.11/32,192.168.1.21/32,192.168.1.30/32,192.168.1.31/32
 wg set wg0 peer <PUBKEY_D2> allowed-ips 10.8.0.12/32,fd42:42:42::12/128,192.168.1.12/32,192.168.1.22/32,192.168.1.32/32
+wg set wg0 peer <PUBKEY_G9> allowed-ips 10.8.0.100/32,fd42:42:42::100/128
 ip route replace 192.168.1.0/24 dev wg0
 ```
 
