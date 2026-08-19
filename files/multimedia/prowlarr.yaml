@@ -60,10 +60,16 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /config
+            - name: custom-defs
+              mountPath: /config/Definitions/Custom
+              readOnly: true
       volumes:
         - name: config
           persistentVolumeClaim:
             claimName: prowlarr-config-local
+        - name: custom-defs
+          configMap:
+            name: prowlarr-custom-defs
 ---
 apiVersion: v1
 kind: Service

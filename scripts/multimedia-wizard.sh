@@ -161,7 +161,8 @@ d=json.load(sys.stdin); print('' if any(x.get('name')=='$app' for x in d) else '
 done
 
 echo
-echo "[5] Prowlarr — indexadores públicos multilingüe (1337x, Torrent9, LimeTorrents, Torrent Downloads) + FlareSolverr"
+echo "[5] Prowlarr — indexadores públicos en castellano (DivxTotal, Torrent9, LimeTorrents) + FlareSolverr"
+echo "    (se purgan los anglófonos 1337x y Torrent Downloads)"
 # Tag cloudflare (idempotente)
 TAG_ID="$(KC -n "$NS" exec "$HELPER" -- curl -s "http://prowlarr:9696/api/v1/tag" -H "X-Api-Key: $PROWLARR_APIKEY" 2>/dev/null \
   | python3 -c "
@@ -184,6 +185,24 @@ else
     && echo "  -> FlareSolverr proxy creado (tag cloudflare)"
 fi
 
+# Baja de indexadores idempotente (por nombre); los anglófonos se purgan.
+idx_remove() {
+  local name="$1" id
+  id="$(KC -n "$NS" exec "$HELPER" -- curl -s "http://prowlarr:9696/api/v1/indexer" -H "X-Api-Key: $PROWLARR_APIKEY" 2>/dev/null \
+    | python3 -c "
+import sys,json
+d=json.load(sys.stdin); print(next((str(x['id']) for x in d if x.get('name')=='$name'), ''))")"
+  if [ -z "$id" ]; then
+    echo "  -> $name no existe (skip)"
+  else
+    KC -n "$NS" exec "$HELPER" -- curl -s -o /dev/null -X DELETE \
+      "http://prowlarr:9696/api/v1/indexer/$id" -H "X-Api-Key: $PROWLARR_APIKEY" \
+      && echo "  -> $name (id $id) eliminado"
+  fi
+}
+idx_remove "1337x"
+idx_remove "Torrent Downloads"
+
 # Alta de indexadores idempotente; las rutas que requieren FlareSolverr llevan el tag.
 idx_add() {
   local name="$1" def="$2" url="$3" cf="$4" tags body result
@@ -201,10 +220,9 @@ import sys,json;d=json.load(sys.stdin);print('' if any(x.get('name')=='$name' fo
     echo "  -> $name alta FALLIDA: $(echo "$result" | head -c 120)"
   fi
 }
-idx_add "1337x"             "1337x"             "https://1337x.to/"           cloudflare
 idx_add "Torrent9"          "torrent9"          "https://www6.torrent9.to/"   ""
 idx_add "LimeTorrents"      "limetorrents"      "https://www.limetorrents.fun/" ""
-idx_add "Torrent Downloads" "torrentdownloads"  "https://www.torrentdownloads.pro/" ""
+idx_add "DivxTotal"         "divxtotal"         "https://divxtotal.foo/"     ""
 
 if [ "$TEST_INDEXERS" = "1" ]; then
   echo

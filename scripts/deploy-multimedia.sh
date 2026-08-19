@@ -36,6 +36,8 @@ ssh "$KUBECTL_HOST" "kubectl -n $NS wait --for=condition=complete job/init-media
 
 echo
 echo "[3/5] Desplegando aplicaciones (flaresolverr, prowlarr, sonarr, radarr, qbittorrent, jellyseerr, jellyfin)..."
+echo "  -> prowlarr-custom-defs (definiciones Cardigann custom, montadas en /config/Definitions/Custom)"
+cat "$MM/prowlarr-custom-defs.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 for app in flaresolverr prowlarr sonarr radarr qbittorrent jellyseerr jellyfin; do
   echo "  -> $app"
   cat "$MM/$app.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
