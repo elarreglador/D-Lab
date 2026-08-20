@@ -140,7 +140,7 @@ Facade de peticiones (Jellyseerr) → organizadores (Sonarr/Radarr) → rastreo 
 ## Radio SDR remota (rtl_tcp)
 
 - **Acceso público**: `sdr.elarreglador.eu:1234` (TCP) — servidor `rtl_tcp` (verificado 2026-08-14: cabecera DongleInfo `RTL0` en el extremo público). **Sin autenticación**: cualquiera con el host:puerto puede sintonizar; **un solo cliente a la vez** (comportamiento nativo de rtl_tcp; el segundo queda a la espera hasta que el primero desconecte).
-- **Hardware**: dongle RTL-SDR v3 (USB `0bda:2838`) + upconverter Nooelec Ham It Up (+125 MHz), conectados en D1.
+- **Hardware**: dongle RTL-SDR v3 (USB `0bda:2838`) + upconverter Nooelec Ham It Up (+125 MHz), conectados en D1. El upconverter permite un rango útil de ~25 MHz a 1700 MHz (con la conversión +125 MHz activa, la recepción HF efectiva es ~0,1–30 MHz).
 - **Workload**: Deployment `rtl-sdr` (1 réplica, imagen `skl256/rtl_tcp`, namespace `pods`), **privilegiado** y anclado a **k8s-worker-1** con `nodeSelector` (`eu.elarreglador/sdr=true`). Monta por `hostPath` el directorio `/dev/bus/usb` del nodo (el dongle se pasa al contenedor LXC k8s-worker-1 con un device `usb` de LXD). Sin PVC (stateless).
 - **Service**: `rtl-sdr`, NodePort `1234 → 31234/TCP`. Las probes son `exec` (`pgrep rtl_tcp`) a propósito: una probe `tcpSocket` al 1234 consumiría el slot del único cliente. Desde MetalLB añade además IP LAN `192.168.1.60:1234` (LoadBalancer, `externalTrafficPolicy: Local`; el NodePort se conserva para el tráfico externo).
 - **Recursos**: requests 50m/64Mi, limits 250m/256Mi.

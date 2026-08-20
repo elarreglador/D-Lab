@@ -78,7 +78,7 @@ Router del proveedor (192.168.1.1, DHCP, WiFi). Más información en [01-Network
 Dispositivo receptor de radio definido por software (SDR):
 - Tratamiento previo de frecuencias para recepción SDR de bandas bajas
 - Suma 125 MHz a la frecuencia para permitir recepción en el SDR
-- Rango: Aproximadamente 25 MHz a 1700 MHz
+- Rango: Aproximadamente 25 MHz a 1700 MHz (rango que permite el upconverter; con la conversión +125 MHz activa, la recepción HF efectiva es ~0,1–30 MHz)
 - Conector: SMA
 
 **RTL-SDR v3 (dongle)**
