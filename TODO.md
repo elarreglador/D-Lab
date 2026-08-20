@@ -12,6 +12,7 @@
 - [x] Landing: cambio de estética a **«GitHub» (Primer)** — plana/neutra, paleta GitHub dark/light (azul `#2f81f7`/`#0969da`, verde `#3fb950`/`#1a7f37`), **tipografías de sistema** (se eliminan las fuentes auto-alojadas; ConfigMap 253→134 KB); el conmutador dark/light y su comportamiento se mantienen intactos
 - [x] Landing: tema por defecto del sistema con conmutador manual claro/oscuro (persistencia en `localStorage` solo al pulsar el botón, `data-theme` + `meta color-scheme`, script anti-flash en `<head>`, fallback sin JS vía media query) — `index.html`, `styles.css`
 - [x] `deploy-landing.sh`: guard por bandas frente al techo de etcd (~1,5 MiB) en lugar del aborto rígido de 1 MiB
+- [x] Landing: tarjeta **«IA local (Ollama)»** en la sección «Servicios D-Lab» (2026-08-20): `dev.svg`, LLM autoalojados de uso interno (sin acceso desde el exterior); ConfigMap ~182 KB base64, pods Running, curl 200 y tarjeta presente en `elarreglador.eu`. Documentado en README-TECH.md § Web pública
 - [ ] Vigilar tamaño de `acerca-de-ti.js`: si supera ~1 MiB raw, migrar la landing a imagen nginx custom (Dockerfile + import en nodos, ver README-TECH § Web pública)
 
 ## Fix
