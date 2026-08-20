@@ -270,7 +270,25 @@ Config global `~/.config/opencode/opencode.jsonc` con dos providers `@ai-sdk/ope
 | `ollama-lan` | `http://192.168.1.31:31434/v1` | G9 en la LAN doméstica |
 | `ollama-wg` | `http://10.8.0.11:31434/v1` | G9 fuera de casa (WireGuard) |
 
-Modelo: `qwen2.5-coder:3b`, `limit.context 32768`, `limit.output 8192`. Uso: `opencode run "..." --model ollama-lan/qwen2.5-coder:3b`. Verificado 2026-08-18 con respuestas reales por ambos providers.
+Modelos registrados con prefijo `D-Lab_` (5 en el PVC; `id` = nombre real en Ollama; `limit.context` = `context_length` verificado en el pod 2026-08-20). Reemplazos 2026-08-20: `deepseek-coder:1.3b` + `yi-coder:1.5b` → `qwen2.5-coder:1.5b`; `granite-code:3b` → `granite3.2:2b`:
+
+| Modelo (clave opencode) | id en Ollama | context | tools (manifiesto) |
+|---|---|---|---|
+| `D-Lab_granite3.2:2b` | `granite3.2:2b` | 131072 | ✓ |
+| `D-Lab_llama3.2:3b` | `llama3.2:3b` | 131072 | ✓ |
+| `D-Lab_qwen2.5-coder:1.5b` | `qwen2.5-coder:1.5b` | 32768 | ✓ |
+| `D-Lab_qwen2.5-coder:3b` | `qwen2.5-coder:3b` | 32768 | ✓ |
+| `D-Lab_smollm2:1.7b` | `smollm2:1.7b` | 8192 | ✓ |
+
+Uso: `opencode run "..." --model ollama-lan/D-Lab_qwen2.5-coder:3b` (o `ollama-wg/...` vía WG).
+
+**Limitación real de tools (verificado 2026-08-20)**: aunque los 5 modelos declaran `tools` en el manifiesto de Ollama (aceptan el array `tools` en la petición), **ninguno ≤3B emite `tool_calls` nativos fiables** en el agente de opencode: en tareas que requieren herramientas responden con JSON en texto (p. ej. `{"name":"read","arguments":...}`) que opencode no ejecuta (mismo caso que [anomalyco/opencode#234](https://github.com/anomalyco/opencode/issues/234)). El agente `build` funciona para conversación y generación de código, pero las tareas que exigen leer/editar archivos no se ejecutan de forma fiable con ningún modelo de este catálogo.
+
+**Gotchas del pod (2026-08-20)**:
+- **OOM**: cargar varios modelos en la ventana `OLLAMA_KEEP_ALIVE` (5 m) supera los 4 GiB del límite → `OOMKilled` (confirmado: restart del pod). Usar un modelo a la vez y esperar a que descargue.
+- **`granite3.2:2b` es un modelo "thinking"**: lento en el pod (2 CPU), respuestas de ~1-2 min en frío. Operativo pero no recomendado para uso interactivo.
+- `granite3.1-dense:2b` se probó como alternativa y se **descartó** (error de servidor persistente al cargarlo en este pod).
+- Los 3 modelos antiguos sin tools (`deepseek-coder:1.3b`, `yi-coder:1.5b`, `granite-code:3b`) se eliminaron del PVC.
 
 ## Exposición pública
 
