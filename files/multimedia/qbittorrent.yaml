@@ -18,7 +18,7 @@ spec:
       securityContext:
         fsGroup: 1000
       nodeSelector:
-        kubernetes.io/hostname: k8s-master-1
+        eu.elarreglador/worker: "true"
       containers:
         - name: qbittorrent
           image: lscr.io/linuxserver/qbittorrent:latest
@@ -76,7 +76,7 @@ spec:
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: qbittorrent-config-local
+            claimName: qbittorrent-config
         - name: media
           persistentVolumeClaim:
             claimName: media-data

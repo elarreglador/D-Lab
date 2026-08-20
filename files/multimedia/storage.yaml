@@ -18,6 +18,10 @@ spec:
 # crash-loopea las apps .NET (Sonarr/Radarr). El almacenamiento local vive en el
 # LXC de cada nodo en /srv/k8s-local/<app>. Pods de réplica única: cada uno queda
 # fijado a su nodo vía nodeSelector en el Deployment + nodeAffinity del PV.
+# Estado 2026-08-20: sonarr/radarr/prowlarr consumen estos PV locales (la migración
+# a NFS se revirtió: fsync ~66ms en Gluster-HDD replicado, ver 03-Aplicaciones.md).
+# qBittorrent/jellyfin/jellyseerr corren sobre los PVC NFS *-config (menos presión
+# de escritura SQLite); sus PV locales quedan Bound/Retain sin consumidores (rollback).
 apiVersion: v1
 kind: PersistentVolume
 metadata:

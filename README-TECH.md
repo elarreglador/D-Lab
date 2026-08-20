@@ -1675,7 +1675,7 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
 
 **En nuestro cluster**: Modo **stacked** — cada control-plane ejecuta su propio etcd (1 miembro por master). Con 2 miembros, si uno falla el cluster etcd pierde quorum (necesita mayoría = 2 de 2). Para HA real se necesita un tercer miembro.
 
-**Nota sobre roles (verificado 2026-08-01)**: `k8s-master-1` ejecuta los componentes de control-plane (apiserver, etcd, scheduler, controller-manager) pero **no tiene** la etiqueta `node-role.kubernetes.io/control-plane` ni el taint `NoSchedule`; solo `k8s-master-2` los conserva. Consecuentemente, el scheduler puede ubicar pods de usuario en `k8s-master-1`. Se documenta el estado real por decisión del señor (sin cambios en el cluster).
+**Nota sobre roles (verificado 2026-08-20)**: ambos control-planes (`k8s-master-1` y `k8s-master-2`) tienen la etiqueta `node-role.kubernetes.io/control-plane` y el taint `NoSchedule`; el scheduler no ubica pods de usuario en los masters. Hasta el **2026-08-20** `k8s-master-1` carecía de label/taint y alojaba pods de usuario (qBittorrent, landing, es-badge); se blindó el 2026-08-20. Movilidad de pods: **qBittorrent, Jellyfin y Jellyseerr** corren en cualquier worker (`eu.elarreglador/worker=true`, config en NFS); los **\*arr** (sonarr/radarr/prowlarr) están anclados a su worker (`kubernetes.io/hostname`, config local-static: SQLite sobre el NFS de Gluster-HDD replicado no es viable, ver 03-Aplicaciones.md) y **rtl-sdr** por hardware (`eu.elarreglador/sdr=true`).
 
 - [x] Agregar segundo control-plane (k8s-master-2 en D2)
 - [x] etcd replicado (stacked, 2 miembros)

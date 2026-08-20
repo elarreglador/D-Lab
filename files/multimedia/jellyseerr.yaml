@@ -18,7 +18,7 @@ spec:
       securityContext:
         fsGroup: 1000
       nodeSelector:
-        kubernetes.io/hostname: k8s-worker-2
+        eu.elarreglador/worker: "true"
       containers:
         - name: jellyseerr
           image: fallenbagel/jellyseerr:latest
@@ -61,7 +61,7 @@ spec:
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: jellyseerr-config-local
+            claimName: jellyseerr-config
 ---
 apiVersion: v1
 kind: Service
