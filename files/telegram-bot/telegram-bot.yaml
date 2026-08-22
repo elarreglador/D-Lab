@@ -1,0 +1,249 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pods
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telegram-bot-code
+  namespace: pods
+data:
+  requirements.txt: |
+    fastapi==0.115.12
+    uvicorn[standard]==0.34.3
+    httpx==0.28.1
+  app.py: |
+    import os
+    import logging
+    from fastapi import FastAPI, HTTPException
+    from pydantic import BaseModel
+    import httpx
+
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger("telegram-bot")
+
+    TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+    TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}/sendMessage" if TOKEN else ""
+
+    app = FastAPI(title="telegram-bot")
+
+    class NotifyRequest(BaseModel):
+        text: str
+        parse_mode: str | None = None
+        disable_notification: bool = False
+
+    class AlertRequest(BaseModel):
+        alerts: list = []
+        receiver: str | None = None
+        status: str | None = None
+        groupLabels: dict | None = None
+        commonAnnotations: dict | None = None
+        externalURL: str | None = None
+
+
+    def _check_config():
+        if not TOKEN or not CHAT_ID:
+            raise HTTPException(status_code=500, detail="Bot no configurado: faltan TELEGRAM_BOT_TOKEN/CHAT_ID")
+
+
+    def _truncate(text: str, limit: int = 4096) -> str:
+        if len(text) <= limit:
+            return text
+        return text[: limit - 20] + "\n...[truncado]"
+
+
+    async def _send_telegram(text: str, parse_mode: str | None, disable_notification: bool):
+        _check_config()
+        payload: dict = {
+            "chat_id": CHAT_ID,
+            "text": _truncate(text),
+            "disable_notification": disable_notification,
+        }
+        if parse_mode in ("Markdown", "MarkdownV2", "HTML"):
+            payload["parse_mode"] = parse_mode
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(TELEGRAM_API, json=payload)
+            try:
+                data = resp.json()
+            except Exception:
+                raise HTTPException(status_code=502, detail=f"Telegram no JSON: {resp.text[:500]}")
+            if resp.status_code != 200 or not data.get("ok"):
+                raise HTTPException(status_code=502, detail=f"Telegram error: {data}")
+            return data
+
+
+    @app.get("/health")
+    async def health():
+        return {"ok": True}
+
+
+    @app.post("/notify")
+    async def notify(req: NotifyRequest):
+        if not req.text or not req.text.strip():
+            raise HTTPException(status_code=400, detail="text vacio")
+        data = await _send_telegram(req.text.strip(), req.parse_mode, req.disable_notification)
+        return {"ok": True, "message_id": data.get("result", {}).get("message_id")}
+
+
+    def _format_alert(a: dict, default_status: str) -> str:
+        labels = a.get("labels", {}) if isinstance(a, dict) else {}
+        anns = a.get("annotations", {}) if isinstance(a, dict) else {}
+        status = a.get("status", default_status)
+        name = labels.get("alertname", "Alert")
+        summary = anns.get("summary", anns.get("description", ""))
+        instance = labels.get("instance", labels.get("pod", ""))
+        sev = labels.get("severity", "")
+        icon = "🔥" if status == "firing" else "✅"
+        line = f"{icon} {status.upper()} {name}"
+        if sev:
+            line += f" [{sev}]"
+        if instance:
+            line += f" @ {instance}"
+        if summary:
+            line += f"\n{summary}"
+        return line
+
+
+    @app.post("/alert")
+    async def alert(req: AlertRequest):
+        if not req.alerts:
+            raise HTTPException(status_code=400, detail="alerts vacio")
+        lines = [_format_alert(a, req.status or "firing") for a in req.alerts]
+        text = "\n\n".join(lines)
+        if req.groupLabels:
+            text = f"Grupo: {req.groupLabels}\n\n" + text
+        data = await _send_telegram(text, None, False)
+        return {"ok": True, "message_id": data.get("result", {}).get("message_id"), "alerts": len(req.alerts)}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telegram-bot
+  namespace: pods
+  labels:
+    app: telegram-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telegram-bot
+  template:
+    metadata:
+      labels:
+        app: telegram-bot
+    spec:
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: install-deps
+          image: python:3.12-alpine
+          command:
+            - sh
+            - -c
+            - pip install --no-cache-dir --target /tmp/deps -r /app/requirements.txt
+          volumeMounts:
+            - name: code
+              mountPath: /app
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      containers:
+        - name: telegram-bot
+          image: python:3.12-alpine
+          command:
+            - sh
+            - -c
+            - PYTHONPATH=/tmp/deps:$PYTHONPATH python -m uvicorn app:app --host 0.0.0.0 --port 8080 --app-dir /app
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: telegram-bot-secret
+                  key: TELEGRAM_BOT_TOKEN
+            - name: TELEGRAM_CHAT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: telegram-bot-secret
+                  key: TELEGRAM_CHAT_ID
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: code
+              mountPath: /app
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: code
+          configMap:
+            name: telegram-bot-code
+            defaultMode: 0444
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: telegram-bot
+  namespace: pods
+  labels:
+    app: telegram-bot
+spec:
+  selector:
+    app: telegram-bot
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

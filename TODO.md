@@ -14,6 +14,7 @@
 - [x] `deploy-landing.sh`: guard por bandas frente al techo de etcd (~1,5 MiB) en lugar del aborto rígido de 1 MiB
 - [x] Landing: tarjeta **«IA local (Ollama)»** en la sección «Servicios D-Lab» (2026-08-20): `dev.svg`, LLM autoalojados de uso interno (sin acceso desde el exterior); ConfigMap ~182 KB base64, pods Running, curl 200 y tarjeta presente en `elarreglador.eu`. Documentado en README-TECH.md § Web pública
 - [ ] Vigilar tamaño de `acerca-de-ti.js`: si supera ~1 MiB raw, migrar la landing a imagen nginx custom (Dockerfile + import en nodos, ver README-TECH § Web pública)
+- [x] telegram_bot: notificaciones Telegram en `pods/telegram-bot` (ClusterIP 8080, `/notify` + `/alert`, Opción A python:alpine + ConfigMap, acceso abierto intra-cluster, Secret gitignored) — `files/telegram-bot/telegram-bot.yaml` (ConfigMap + Deployment python:3.12-alpine + Service), `files/telegram-bot/networkpolicy.yaml` (ingress abierto + egress 443), `scripts/deploy-telegram-bot.sh` (Secret por stdin). Verificado 2026-08-22: `getUpdates`→@Arreglador/`getMe` @Dlab_mrbot/`sendMessage` OK, `info_sensible/telegram.env` (600, gitignored, offset limpiado), `rollout` OK `10.244.1.109 k8s-worker-2`, `ClusterIP 10.111.44.193:8080`, `/health` 200, `/notify` `message_id 5` y `/alert` `message_id 6` desde pods/ia. Repo sin histórico (sin polling/PVC/log de `text`). Documentado en `03-Aplicaciones.md`
 
 ## Fix
 
