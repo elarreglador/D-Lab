@@ -1,2 +1,5 @@
 info_sensible/
 .obsidian/
+.worktrees/
+
+__pycache__/
