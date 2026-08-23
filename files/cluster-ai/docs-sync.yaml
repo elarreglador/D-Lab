@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: docs-cache
+  namespace: ia
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 1Gi}
+  storageClassName: nfs-storage
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: docs-sync
+  namespace: ia
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: sync
+              image: alpine/git:2.45.2
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  REPO="https://github.com/elarreglador/D-Lab.git"
+                  CACHE="/cache/docs"
+                  FLAG="/cache/.last_commit"
+                  mkdir -p /cache
+                  if [ -d "$CACHE/.git" ]; then
+                    git -C "$CACHE" fetch --depth 1 origin main || git clone --depth 1 "$REPO" "$CACHE"
+                    git -C "$CACHE" reset --hard origin/main
+                  else
+                    rm -rf "$CACHE"
+                    git clone --depth 1 "$REPO" "$CACHE"
+                  fi
+                  CUR=$(git -C "$CACHE" rev-parse HEAD)
+                  OLD=$(cat "$FLAG" 2>/dev/null || echo "")
+                  if [ "$CUR" != "$OLD" ]; then
+                    echo "$CUR" > "$FLAG"
+                    echo "Docs actualizados: $CUR"
+                    echo "Reindexando RAG (chunk ## 500/50 + all-MiniLM-L6-v2 + Chroma TOP_K=3)..."
+                    wget -qO- --post-data="" --header="Content-Type: application/json" http://cluster-ai-api.ia.svc:8000/reindex || echo "reindex trigger falló (api no lista, se reintentará en 15m)"
+                    if [ -n "$CUR" ] && [ "$CUR" != "$OLD" ] && [ -n "$OLD" ]; then
+                      wget -qO- --post-data="{\"text\":\"ℹ️ Docs actualizados: $CUR\"}" --header="Content-Type: application/json" http://telegram-bot.pods.svc:8080/notify || true
+                    fi
+                  else
+                    echo "Docs sin cambios: $CUR"
+                  fi
+              volumeMounts:
+                - name: cache
+                  mountPath: /cache
+              resources:
+                requests: {cpu: 20m, memory: 32Mi}
+                limits: {cpu: 100m, memory: 128Mi}
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                runAsGroup: 1000
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+          volumes:
+            - name: cache
+              persistentVolumeClaim: {claimName: docs-cache}

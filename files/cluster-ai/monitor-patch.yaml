@@ -1,0 +1,15 @@
+# Fase D — placeholder monitor 5m (pods CrashLoop, nodes NotReady, storage VIP/showmount, etcd readyZ, cert-manager <30d)
+# Este ConfigMap se montará como monitor.py adicional en Fase D.
+# Fase A lo deja vacío para no alterar el Deployment base.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-ai-monitor
+  namespace: ia
+data:
+  monitor.py: |
+    import logging
+    log = logging.getLogger("monitor")
+    # Fase D: implementar checks 5m + webhook http://telegram-bot.pods.svc:8080/alert
+    async def check():
+        log.info("monitor stub Fase A — sin checks")

@@ -1843,6 +1843,13 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - Verificado (2026-08-14): pod Running en k8s-worker-1; cabecera DongleInfo (magic `RTL0`) recibida en `10.8.0.11:1234` desde D1/​DV0 y en el extremo público `sdr.elarreglador.eu:1234` tras aplicar el bloque `stream` en DV0
   - Detalle en [03-Aplicaciones.md#radio-sdr-remota-rtl_tcp](./03-Aplicaciones.md#radio-sdr-remota-rtl_tcp) y [01-Network.md#radio-sdr-remota-rtl_tcp--lxc-proxy-device](./01-Network.md#radio-sdr-remota-rtl_tcp--lxc-proxy-device)
 
+- [x] **Fase 14: Cluster AI — chat Telegram con IA local, RAG y monitor** (verificado 2026-08-22):
+  - Bot separado `@Dlab_assistant_bot` (token `TELEGRAM_AI_TOKEN` + allowlist `836571451`) en `ia` `Deployment cluster-ai-api` 1 réplica `Recreate` `python:3.12-slim` `Service 8000` + `ConfigMap cluster-ai-code` (`app.py`+`rag.py`+`monitor.py` `apscheduler` `sentence-transformers` `chromadb`) `PVC docs-cache 1Gi nfs-storage` `/cache/docs` + `CronJob docs-sync */15` `git clone --depth 1` → `/cache/docs` + `POST /reindex` 183 chunks `all-MiniLM-L6-v2` `Chroma TOP_K=3` `HF_HOME=/tmp/hf_cache`
+  - Orquestador determinista `regex→tool` (`/get nodes|ns|pods|deployments|events|logs|top|status|alerts|help` + `sin / → Ollama` `OLLAMA_URL http://ollama.ia.svc:11434` `qwen2.5-coder:3b` `timeout 90s retry 1`) `fetch_cluster_data` live K8s inyectado, `truncate 4096`, `asyncio.to_thread`, `Fuentes:` `HTML` `<a href="https://github.com/elarreglador/D-Lab/blob/main/{file}#L{line}">` `parse_mode HTML`
+  - Monitor 5m `APScheduler` (`check_pods` `CrashLoop`, `check_nodes` `NotReady`, `check_storage` `192.168.1.30:2049`, `check_etcd` `readyZ`, `check_certs` `<30d`) → `POST http://telegram-bot.pods.svc:8080/notify` + `Alertmanager` `webhook http://telegram-bot.pods.svc:8080/alert` (`Secret alertmanager.yaml` `receiver telegram`)
+  - RBAC `cluster-ai-sa` `get/list/watch` sin `secrets` (`auth can-i get secrets → no`), `NetworkPolicy` `egress 53/80/443/6443/8443/2049/111/11434/8080`, `Quota ia 4CPU/8Gi→8CPU/16Gi`, `SecurityContext` `runAsNonRoot/readOnlyRootFilesystem/drop ALL`, `scripts/deploy-cluster-ai.sh` `Secret stdin` + `scripts/simulate-cluster-ai.sh` Plan B CLI `--all` + `POST /simulate` `/debug/rag`
+  - Verificado: `rollout status` `health {"ok":true}` `184` `message_id` `VIP 192.168.1.30 → 03-Aplicaciones.md:28` `Gluster → README-TECH.md:2597` `status → 🤖`
+
 ### En Progreso 🔄
 
 - [ ] **Fase 13**: tercer nodo de control-plane (D3) para quorum etcd (3 miembros mínimo)

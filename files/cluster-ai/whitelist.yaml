@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-ai-whitelist
+  namespace: ia
+data:
+  whitelist.yaml: |
+    # Lista blanca RO auditable — solo comandos no intrusivos
+    #_allow ejecuta con timeout 10s, 3000 chars max, 5/min, audit stdout
+    allow:
+      - pattern: "^kubectl get nodes$"
+        desc: "lista nodos"
+      - pattern: "^kubectl get ns$"
+        desc: "lista namespaces"
+      - pattern: "^kubectl get namespaces$"
+        desc: "alias ns"
+      - pattern: "^kubectl get pods.*$"
+        desc: "pods por namespace"
+      - pattern: "^kubectl get deployments.*$"
+        desc: "deployments"
+      - pattern: "^kubectl get events.*$"
+        desc: "events"
+      - pattern: "^kubectl describe (pod|node|deployment).*"
+        desc: "describe"
+      - pattern: "^kubectl logs .* --tail 100 --since 10m$"
+        desc: "logs tail 100"
+      - pattern: "^kubectl logs .* --tail 100$"
+        desc: "logs tail fallback"
+      - pattern: "^kubectl top (nodes|pods).*"
+        desc: "metrics"
+      - pattern: "^kubectl get --raw /readyz$"
+        desc: "etcd readyZ"
+      - pattern: "^gluster volume status$"
+        desc: "gluster status"
+      - pattern: "^systemctl is-active (glusterd|nfs-ganesha|keepalived)$"
+        desc: "systemctl is-active"
+      - pattern: "^nmap -sn --unprivileged (192\\.168\\.1\\.0/24|10\\.8\\.0\\.0/24)$"
+        desc: "nmap ping scan LAN/WG"
+      - pattern: "^nmap -sT -p .*"
+        desc: "nmap service scan"
+      - pattern: "^nmap -sV -O -T4 -F \\S+$"
+        desc: "nmap fast scan"
+      - pattern: "^ping -c1 -W1 \\S+$"
+        desc: "ping"
+      - pattern: "^ping -c3 -W2 \\S+$"
+        desc: "ping 3"
+      - pattern: "^ip -4 addr$"
+        desc: "ip addr"
+      - pattern: "^ip neigh$"
+        desc: "ip neigh"
+      - pattern: "^arp -a$"
+        desc: "arp"
+      - pattern: "^arp-scan --localnet$"
+        desc: "arp-scan"
+      - pattern: "^dig -x \\S+$"
+        desc: "dig reverse"
+      - pattern: "^host \\S+$"
+        desc: "host"
+      - pattern: "^ss -tuln$"
+        desc: "ss"
+      - pattern: "^cat /proc/net/arp$"
+        desc: "arp proc"
+    deny_substrings:
+      - ";"
+      - "&&"
+      - "|"
+      - "$"
+      - "`"
+      - ">"
+      - "delete"
+      - "apply"
+      - "exec -it"
+      - "drain"
+      - "cordon"
+      - "rollout"
+      - "secret"
+      - "token"
+      - "password"
+      - "credential"
+    limits:
+      timeout_seconds: 10
+      max_chars: 3000
+      rate_per_minute: 5

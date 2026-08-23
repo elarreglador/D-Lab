@@ -1,0 +1,123 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cluster-ai-allow
+  namespace: ia
+spec:
+  podSelector:
+    matchLabels:
+      app: cluster-ai-api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+        - ipBlock:
+            cidr: 10.96.0.0/12
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Telegram Bot API 443 + k8s via 0.0.0.0/0 fallback + apt 80
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+        - protocol: TCP
+          port: 8443
+    # Ollama 11434
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ia
+          podSelector:
+            matchLabels:
+              app: ollama
+      ports:
+        - protocol: TCP
+          port: 11434
+    # telegram-bot gateway 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: pods
+          podSelector:
+            matchLabels:
+              app: telegram-bot
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Kubernetes API 6443/443 (RO) — 443 es KUBERNETES_SERVICE_PORT, 6443 targetPort DNAT a 192.168.1.21/22
+    - to:
+        - ipBlock:
+            cidr: 10.96.0.0/12
+        - ipBlock:
+            cidr: 192.168.1.0/24
+      ports:
+        - protocol: TCP
+          port: 6443
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 8443
+        - protocol: TCP
+          port: 2049
+        - protocol: TCP
+          port: 111
+    # LAN/WG scan: nmap, ping, arp, dns
+    - to:
+        - ipBlock:
+            cidr: 192.168.1.0/24
+        - ipBlock:
+            cidr: 10.8.0.0/24
+      ports:
+        - protocol: TCP
+        - protocol: UDP
+    - to:
+        - ipBlock:
+            cidr: 192.168.1.0/24
+        - ipBlock:
+            cidr: 10.8.0.0/24
+    - to:
+        - ipBlock:
+            cidr: 192.168.1.0/24
+        - ipBlock:
+            cidr: 10.8.0.0/24
+        - ipBlock:
+            cidr: 224.0.0.0/4
+      ports:
+        - protocol: UDP
+          port: 5353
+        - protocol: UDP
+          port: 1900
+        - protocol: UDP
+          port: 67
+        - protocol: UDP
+          port: 68
+        - protocol: UDP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 192.168.1.0/24
+        - ipBlock:
+            cidr: 10.8.0.0/24
+        - ipBlock:
+            cidr: 224.0.0.0/4
