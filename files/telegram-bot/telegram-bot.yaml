@@ -74,9 +74,52 @@ data:
             return data
 
 
+    import json, time
+    from pathlib import Path
+    HISTORY = Path("/data/history.jsonl")
+    HISTORY.parent.mkdir(parents=True, exist_ok=True)
+
+    def _append_history(entry: dict):
+        try:
+            entry["ts"] = time.time()
+            with open(HISTORY, "a") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            # Rotate if >10MiB or >1000 lines
+            if HISTORY.stat().st_size > 10*1024*1024:
+                lines = open(HISTORY).readlines()[-500:]
+                open(HISTORY, "w").writelines(lines)
+        except Exception as e:
+            log.warning(f"history append fail: {e}")
+
     @app.get("/health")
     async def health():
         return {"ok": True}
+
+    @app.get("/history")
+    async def history(since: str = "24h", limit: int = 100):
+        try:
+            import re
+            # Parse since: 24h, 7d, 30m
+            m = re.match(r"(\d+)([hdm])", since)
+            if m:
+                val, unit = int(m.group(1)), m.group(2)
+                secs = val * (3600 if unit=="h" else 86400 if unit=="d" else 60)
+                cutoff = time.time() - secs
+            else:
+                cutoff = time.time() - 86400
+            out = []
+            if HISTORY.exists():
+                for line in open(HISTORY):
+                    try:
+                        e = json.loads(line)
+                        if e.get("ts", 0) >= cutoff:
+                            out.append(e)
+                    except:
+                        continue
+            out = out[-limit:]
+            return {"ok": True, "count": len(out), "history": out}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
 
     @app.post("/notify")
@@ -84,7 +127,9 @@ data:
         if not req.text or not req.text.strip():
             raise HTTPException(status_code=400, detail="text vacio")
         data = await _send_telegram(req.text.strip(), req.parse_mode, req.disable_notification)
-        return {"ok": True, "message_id": data.get("result", {}).get("message_id")}
+        mid = data.get("result", {}).get("message_id")
+        _append_history({"source": "notify", "text": req.text.strip(), "message_id": mid, "parse_mode": req.parse_mode})
+        return {"ok": True, "message_id": mid}
 
 
     def _format_alert(a: dict, default_status: str) -> str:
@@ -115,7 +160,9 @@ data:
         if req.groupLabels:
             text = f"Grupo: {req.groupLabels}\n\n" + text
         data = await _send_telegram(text, None, False)
-        return {"ok": True, "message_id": data.get("result", {}).get("message_id"), "alerts": len(req.alerts)}
+        mid = data.get("result", {}).get("message_id")
+        _append_history({"source": "alert", "text": text, "message_id": mid, "alerts": req.alerts, "groupLabels": req.groupLabels})
+        return {"ok": True, "message_id": mid, "alerts": len(req.alerts)}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -150,6 +197,8 @@ spec:
               mountPath: /app
             - name: tmp
               mountPath: /tmp
+            - name: history
+              mountPath: /data
           resources:
             requests:
               cpu: 50m
@@ -224,6 +273,8 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: history
+              mountPath: /data
       volumes:
         - name: code
           configMap:
@@ -231,6 +282,22 @@ spec:
             defaultMode: 0444
         - name: tmp
           emptyDir: {}
+        - name: history
+          persistentVolumeClaim:
+            claimName: telegram-bot-history
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: telegram-bot-history
+  namespace: pods
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: nfs-storage-v4
 ---
 apiVersion: v1
 kind: Service
