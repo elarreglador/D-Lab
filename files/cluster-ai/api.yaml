@@ -1,0 +1,922 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-ai-code
+  namespace: ia
+data:
+  requirements.txt: |
+    fastapi==0.115.12
+    uvicorn[standard]==0.34.3
+    httpx==0.28.1
+    kubernetes==31.0.0
+    pyyaml==6.0.2
+    sentence-transformers==2.7.0
+    chromadb==0.4.22
+    numpy==1.26.4
+    apscheduler==3.10.4
+  app.py: |
+    import os, re, time, logging, collections, asyncio
+    from fastapi import FastAPI
+    import httpx
+    import yaml
+    from kubernetes import client, config
+
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger("cluster-ai")
+    app = FastAPI(title="cluster-ai-api")
+    TOKEN = os.getenv("TELEGRAM_AI_TOKEN", "")
+    CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+    TG_API = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else ""
+    OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama.ia.svc:11434")
+    MODEL = os.getenv("MODEL", "qwen2.5-coder:3b")
+    OFF = 0
+    RATE = collections.deque()
+    HELP = "/get nodes — lista nodos\n/get ns — namespaces\n/get pods [ns]\n/get deployments [ns]\n/get events [ns]\n/logs <ns> <pod>\n/top nodes|pods\n/net scan — escanea LAN 192.168.1.0/24 + WG 10.8.0.0/24 con nmap\n/net ping <ip> — ping\n/status\n/alerts\n/notifs [24h]\n/investiga [id]\n/help — ayuda\n/docs <pregunta>\n(sin / → Ollama+RAG, ej. ¿qué equipos hay en la red local?)"
+
+    def load_whitelist():
+        try:
+            with open("/config/whitelist.yaml") as f:
+                d = yaml.safe_load(f)
+                allow = [x["pattern"] for x in d.get("allow", [])]
+                deny = d.get("deny_substrings", [])
+                lim = d.get("limits", {})
+                return allow, deny, lim
+        except Exception as e:
+            log.warning(f"whitelist load fail: {e}")
+            return [r"^kubectl get nodes$"], [";", "&&", "|"], {}
+    ALLOW, DENY, LIMITS = load_whitelist()
+
+    def is_allowed(cmd: str) -> bool:
+        low = cmd.lower()
+        for d in DENY:
+            if d.lower() in low:
+                return False
+        for pat in ALLOW:
+            if re.match(pat, cmd.strip()):
+                return True
+        return False
+
+    def check_rate() -> bool:
+        now = time.time()
+        while RATE and now - RATE[0] > 60:
+            RATE.popleft()
+        if len(RATE) >= LIMITS.get("rate_per_minute", 5):
+            return False
+        RATE.append(now)
+        return True
+
+    def truncate(t: str, lim: int = 4096) -> str:
+        return t if len(t) <= lim else t[: lim - 20] + "\n...[truncado]"
+
+    def k8s():
+        try:
+            config.load_incluster_config()
+        except Exception:
+            config.load_kube_config()
+        return client.CoreV1Api(), client.AppsV1Api()
+
+    def fetch_cluster_data() -> str:
+        v1, apps = k8s()
+        out = ["=== NODES ==="]
+        for n in v1.list_node().items:
+            st = next((c.type for c in n.status.conditions if c.status == "True"), "?")
+            out.append(f"{n.metadata.name} {st}")
+        out.append("=== PODS ===")
+        for p in v1.list_pod_for_all_namespaces().items[:20]:
+            out.append(f"{p.metadata.namespace}/{p.metadata.name} {p.status.phase}")
+        out.append("=== DEPLOYMENTS ===")
+        for d in apps.list_deployment_for_all_namespaces().items[:10]:
+            out.append(f"{d.metadata.namespace}/{d.metadata.name} {d.status.ready_replicas}/{d.spec.replicas}")
+        return "\n".join(out)
+
+    def build_prompt(ctx: str, rag_ctx: str = "") -> str:
+        base = f"Eres asistente D-Lab. Datos vivos:\n{ctx}\n"
+        if rag_ctx:
+            base += f"Docs relevantes:\n{rag_ctx}\n"
+        base += "Responde conciso, usa ✅❌⚠️ y cita file:línea."
+        return base
+
+    async def ask_ollama(q: str, ctx: str, rag_ctx: str = "") -> str:
+        system = build_prompt(ctx, rag_ctx)
+        payload = {"model": MODEL, "prompt": q, "system": system, "stream": False}
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=90) as c:
+                    r = await c.post(f"{OLLAMA_URL}/api/generate", json=payload)
+                    r.raise_for_status()
+                    return r.json().get("response", "Sin respuesta")
+            except Exception as e:
+                log.warning(f"ollama generate fail attempt {attempt+1}: {e!r}")
+        try:
+            payload2 = {"model": MODEL, "messages": [{"role": "system", "content": system}, {"role": "user", "content": q}], "stream": False}
+            async with httpx.AsyncClient(timeout=90) as c:
+                r = await c.post(f"{OLLAMA_URL}/api/chat", json=payload2)
+                r.raise_for_status()
+                return r.json().get("message", {}).get("content", "Sin respuesta")
+        except Exception as e:
+            log.warning(f"ollama chat fail: {e!r}")
+            return f"⚠️ Ollama no disponible: {e!r}"
+
+    def rag_query(q: str, k=3) -> str:
+        try:
+            import rag
+            import re, html
+            qn = re.sub(r"[¿?¡!]", "", q.lower())
+            res = rag.query_docs(qn, k=k)
+            if not res:
+                return ""
+            out = []
+            for txt, fp, line in res:
+                url = f"https://github.com/elarreglador/D-Lab/blob/main/{fp}#L{line}"
+                safe = html.escape(txt[:300])
+                out.append(f'<a href="{url}">{fp}:{line}</a> {safe}')
+            return "\n---\n".join(out)
+        except Exception as e:
+            log.warning(f"rag query fail: {e}")
+            return ""
+
+    def cmd_nodes() -> str:
+        v1, _ = k8s()
+        out = ["📊 Nodes"]
+        for n in v1.list_node().items:
+            st = next((c.type for c in n.status.conditions if c.status == "True"), "?")
+            ic = "✅" if st == "Ready" else "❌"
+            out.append(f"{ic} {n.metadata.name} {st}")
+        return "\n".join(out)
+
+    def cmd_ns() -> str:
+        v1, _ = k8s()
+        out = ["📁 Namespaces"]
+        for n in v1.list_namespace().items:
+            out.append(f"• {n.metadata.name}")
+        return "\n".join(out)
+
+    def cmd_pods(ns: str) -> str:
+        v1, _ = k8s()
+        if ns == "all":
+            pods = v1.list_pod_for_all_namespaces().items
+            title = "📦 Pods — all"
+        else:
+            pods = v1.list_namespaced_pod(ns).items
+            title = f"📦 Pods — {ns}"
+        if not pods:
+            return f"{title}\n(no pods)"
+        out = [title]
+        for p in pods[:30]:
+            out.append(f"{p.metadata.namespace}/{p.metadata.name} {p.status.phase}")
+        return "\n".join(out)
+
+    def cmd_deps(ns: str) -> str:
+        _, apps = k8s()
+        if ns == "all":
+            deps = apps.list_deployment_for_all_namespaces().items
+            title = "🚀 Deployments — all"
+        else:
+            deps = apps.list_namespaced_deployment(ns).items
+            title = f"🚀 Deployments — {ns}"
+        if not deps:
+            return f"{title}\n(no deps)"
+        out = [title]
+        for d in deps[:20]:
+            out.append(f"{d.metadata.namespace}/{d.metadata.name} {d.status.ready_replicas}/{d.spec.replicas}")
+        return "\n".join(out)
+
+    def cmd_events(ns: str) -> str:
+        v1, _ = k8s()
+        evs = v1.list_namespaced_event(ns).items
+        warns = [e for e in evs if e.type == "Warning"][-10:]
+        if not warns:
+            return f"✅ Events — {ns}\n(no warnings)"
+        out = [f"⚠️ Events — {ns}"]
+        for e in warns:
+            out.append(f"{e.reason} {e.involved_object.name}: {e.message[:120]}")
+        return "\n".join(out)
+
+    def cmd_logs(ns: str, pod: str) -> str:
+        v1, _ = k8s()
+        try:
+            txt = v1.read_namespaced_pod_log(name=pod, namespace=ns, tail_lines=100, since_seconds=600)
+            if not txt.strip():
+                return f"📋 Logs — {ns}/{pod}\n(no output)"
+            return f"📋 Logs — {ns}/{pod}\n{txt[-3000:]}"
+        except Exception as e:
+            pods = v1.list_namespaced_pod(ns).items
+            m = next((p for p in pods if pod in p.metadata.name), None)
+            if not m:
+                return f"❌ Pod {pod} no encontrado en {ns}"
+            try:
+                txt = v1.read_namespaced_pod_log(name=m.metadata.name, namespace=ns, tail_lines=100, since_seconds=600)
+                return f"📋 Logs — {m.metadata.name}\n{txt[-3000:]}"
+            except Exception as e2:
+                return f"❌ Logs error: {e2}"
+
+    def cmd_top(kind: str) -> str:
+        try:
+            tok = open("/var/run/secrets/kubernetes.io/serviceaccount/token").read()
+            import httpx
+            with httpx.Client(verify=False, timeout=5) as c:
+                r = c.get(f"https://10.96.0.1:443/apis/metrics.k8s.io/v1beta1/{kind}", headers={"Authorization": f"Bearer {tok}"})
+                r.raise_for_status()
+                data = r.json()
+                out = [f"📊 Top {kind}"]
+                for it in data.get("items", [])[:10]:
+                    n = it["metadata"]["name"]
+                    cpu = it["usage"]["cpu"]
+                    mem = it["usage"]["memory"]
+                    out.append(f"{n} {cpu} {mem}")
+                return "\n".join(out)
+        except Exception as e:
+            return f"⚠️ Top error: {e}"
+
+    def cmd_ping(ip: str) -> str:
+        import subprocess, shutil, os, pathlib
+        bin_path = "/tmp/ping" if pathlib.Path("/tmp/ping").exists() else shutil.which("ping") or "ping"
+        if not is_allowed(f"ping -c1 -W1 {ip}"):
+            return "⛔ ping no permitido"
+        try:
+            env = os.environ.copy()
+            env["LD_LIBRARY_PATH"] = "/tmp/lib:" + env.get("LD_LIBRARY_PATH", "")
+            out = subprocess.check_output([bin_path, "-c1", "-W1", ip], timeout=5, text=True, env=env)
+            return f"🏓 ping {ip}\n{out[:500]}"
+        except Exception as e:
+            return f"❌ ping {ip} fail: {e}"
+
+    def cmd_ip_neigh() -> str:
+        import subprocess, shutil, os, pathlib
+        bin_path = "/tmp/ip" if pathlib.Path("/tmp/ip").exists() else shutil.which("ip") or "ip"
+        try:
+            env = os.environ.copy()
+            env["LD_LIBRARY_PATH"] = "/tmp/lib:" + env.get("LD_LIBRARY_PATH", "")
+            out = subprocess.check_output([bin_path, "neigh"], timeout=5, text=True, env=env)
+            return f"🔗 ip neigh\n{out[:1500]}"
+        except Exception as e:
+            return f"❌ ip neigh fail: {e}"
+
+    def cmd_nmap(target: str, fast: bool = False) -> str:
+        import subprocess, shutil, os, pathlib
+        bin_path = "/tmp/nmap" if pathlib.Path("/tmp/nmap").exists() else shutil.which("nmap") or "nmap"
+        args = [bin_path, "-sn", "--unprivileged", target] if not fast else [bin_path, "-sT", "-p", "22,80,443,3306,5432,6379,8080,8443", target]
+        check = "nmap " + " ".join(args[1:])
+        if not is_allowed(check):
+            return f"⛔ nmap no permitido"
+        try:
+            env = os.environ.copy()
+            env["LD_LIBRARY_PATH"] = "/tmp/lib:" + env.get("LD_LIBRARY_PATH", "")
+            out = subprocess.check_output(args, timeout=30, text=True, env=env)
+            return f"🗺️ nmap {target}\n{out[:2500]}"
+        except Exception as e:
+            return f"❌ nmap {target} fail: {e}"
+
+    def cmd_net_scan() -> str:
+        out = ["🔍 Scan LAN 192.168.1.0/24 + WG 10.8.0.0/24"]
+        try:
+            lan = cmd_nmap("192.168.1.0/24")
+            out.append(lan[:1500])
+        except Exception as e:
+            out.append(f"nmap LAN fail: {e}")
+        try:
+            wg = cmd_nmap("10.8.0.0/24")
+            out.append(wg[:1000])
+        except Exception as e:
+            out.append(f"nmap WG fail (timeout normal si WG no responde): {e}")
+        try:
+            out.append(cmd_ip_neigh()[:800])
+        except:
+            pass
+        return truncate("\n---\n".join(out))
+
+    def audit(user: str, cmd: str, ok: bool):
+        log.info(f"AUDIT user={user} cmd=\"{cmd}\" allowed={ok}")
+
+    async def send(text: str):
+        if not TOKEN or not CHAT_ID:
+            return
+        async with httpx.AsyncClient(timeout=10) as c:
+            await c.post(f"{TG_API}/sendMessage", json={"chat_id": CHAT_ID, "text": truncate(text), "parse_mode": "HTML", "disable_web_page_preview": True})
+
+    async def cmd_status() -> str:
+        ctx = await asyncio.to_thread(fetch_cluster_data)
+        rag_ctx = await asyncio.to_thread(rag_query, "estado cluster", 3)
+        ans = await ask_ollama("Resume estado del cluster D-Lab, usa ✅❌", ctx, rag_ctx)
+        return truncate(f"🤖 Status\n{ctx[:800]}\n\nDocs:\n{rag_ctx[:800]}\n\n{ans}")
+
+    async def handle_net(q: str) -> str:
+        if any(w in q.lower() for w in ["equipos", "red local", "scan", "nmap", "dispositivos", "192.168"]):
+            scan = await asyncio.to_thread(cmd_net_scan)
+            extra = ""
+            try:
+                import re
+                # Filtra network/broadcast y toma 5 hosts vivos
+                ips = [ip for ip in re.findall(r"192\.168\.1\.\d+", scan) if not ip.endswith(".0") and not ip.endswith(".255")][:5]
+                for ip in ips:
+                    extra += "\n" + await asyncio.to_thread(cmd_nmap, ip, True)
+            except:
+                pass
+            return truncate(f"{scan}\n{extra[:1500]}")
+        # Ping o ip neigh específico
+        if "ping" in q.lower():
+            import re
+            m = re.search(r"(\d+\.\d+\.\d+\.\d+)", q)
+            ip = m.group(1) if m else "192.168.1.1"
+            return await asyncio.to_thread(cmd_ping, ip)
+        if "ip neigh" in q.lower() or "arp" in q.lower():
+            return await asyncio.to_thread(cmd_ip_neigh)
+        return await handle_ollama(q)
+
+    async def handle_ollama(q: str) -> str:
+        # Si es consulta de red, deriva a handle_net
+        if any(w in q.lower() for w in ["equipos", "red local", "scan", "nmap", "192.168", "10.8.0", "ping", "arp", "ip neigh"]):
+            return await handle_net(q)
+        ctx = await asyncio.to_thread(fetch_cluster_data)
+        rag_ctx = await asyncio.to_thread(rag_query, q, 3)
+        ans = await ask_ollama(q, ctx, rag_ctx)
+        if rag_ctx and "⚠️" not in ans and "Ollama no disponible" not in ans:
+            return truncate(f"{ans}\n\nFuentes:\n{rag_ctx}")
+        return truncate(ans)
+
+    async def handle_notifs(t: str, user: str) -> str:
+        try:
+            import re, datetime
+            m = re.search(r"(\d+)([hdm])", t)
+            since = m.group(0) if m else "24h"
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(f"http://telegram-bot.pods.svc:8080/history", params={"since": since, "limit": 50})
+                hist = r.json().get("history", [])
+                if not hist:
+                    return f"📭 No hay notificaciones en {since}"
+                out = [f"📬 Notificaciones {since} ({len(hist)}):"]
+                for e in hist[-10:]:
+                    dt = datetime.datetime.fromtimestamp(e.get("ts",0)).strftime("%m-%d %H:%M")
+                    out.append(f"{dt} [{e.get('source')}] {e.get('text','')[:180]} (id:{e.get('message_id')})")
+                return truncate("\n".join(out))
+        except Exception as e:
+            return f"⚠️ Historial fail: {e}"
+
+    def _find_target(hist, mid):
+        if mid:
+            for e in hist:
+                if str(e.get("message_id")) == mid:
+                    return e
+        return hist[-1] if hist else None
+
+    async def _investigate_logs(txt: str) -> str:
+        import re
+        m = re.search(r"(\S+)/(\S+)", txt)
+        ns, pod = ("default", "unknown")
+        if m:
+            for p in txt.split():
+                if "/" in p and not p.startswith("http"):
+                    try:
+                        ns, pod = p.split("/", 1)
+                        pod = pod.split()[0].strip(",")
+                        break
+                    except:
+                        pass
+        if pod == "unknown":
+            return ""
+        try:
+            logs = await asyncio.to_thread(cmd_logs, ns, pod.split("/")[0][:50])
+            return f"\n--- Logs {ns}/{pod} ---\n{logs[:800]}"
+        except Exception as e:
+            return f"\nLogs error: {e}"
+
+    async def handle_investigate(t: str, user: str) -> str:
+        try:
+            import re, httpx
+            mid = re.search(r"(\d+)", t)
+            mid = mid.group(1) if mid else None
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get("http://telegram-bot.pods.svc:8080/history", params={"since": "24h", "limit": 100})
+                hist = r.json().get("history", [])
+            target = _find_target(hist, mid)
+            if not target:
+                return "❓ No hay notificación para investigar"
+            txt = target.get("text", "")
+            logs = await _investigate_logs(txt)
+            return truncate(f"🔍 id:{target.get('message_id')}\n{txt[:500]}{logs}")
+        except Exception as e:
+            return f"⚠️ Investigate fail: {e}" 
+
+    async def handle_docs(q: str) -> str:
+        rag_ctx = await asyncio.to_thread(rag_query, q, 3)
+        if not rag_ctx:
+            return "❓ No hay docs indexados aún, intenta en 1 min"
+        ctx = await asyncio.to_thread(fetch_cluster_data)
+        ans = await ask_ollama(q, ctx, rag_ctx)
+        if "⚠️" in ans or "Ollama no disponible" in ans:
+            return truncate(ans)
+        return truncate(f"{ans}\n\nFuentes:\n{rag_ctx}")
+
+    async def handle_get(t: str, user: str) -> str:
+        low = t.lower()
+        if low.startswith("/get nodes"):
+            audit(user, "kubectl get nodes", True)
+            return await asyncio.to_thread(cmd_nodes)
+        if low.startswith("/get ns"):
+            audit(user, "kubectl get ns", True)
+            return await asyncio.to_thread(cmd_ns)
+        if low.startswith("/get pods"):
+            ns = t.split()[2] if len(t.split()) > 2 else "default"
+            audit(user, f"kubectl get pods {ns}", True)
+            return await asyncio.to_thread(cmd_pods, ns)
+        if low.startswith("/get deployments"):
+            ns = t.split()[2] if len(t.split()) > 2 else "default"
+            audit(user, f"kubectl get deployments {ns}", True)
+            return await asyncio.to_thread(cmd_deps, ns)
+        if low.startswith("/get events"):
+            ns = t.split()[2] if len(t.split()) > 2 else "default"
+            audit(user, f"kubectl get events {ns}", True)
+            return await asyncio.to_thread(cmd_events, ns)
+        return "❓ Get desconocido"
+
+    async def handle_misc(t: str, user: str) -> str:
+        if t.lower().startswith("/net"):
+            return await handle_net(t)
+        if t.lower().startswith("/logs"):
+            parts = t.split()
+            if len(parts) < 2:
+                return "Uso: /logs <ns> <pod>"
+            ns, pod = ("default", parts[1]) if len(parts) == 2 else (parts[1], parts[2])
+            audit(user, f"kubectl logs {pod} --tail 100", True)
+            return await asyncio.to_thread(cmd_logs, ns, pod)
+        if t.lower().startswith("/top"):
+            kind = t.split()[1] if len(t.split()) > 1 else "nodes"
+            audit(user, f"kubectl top {kind}", True)
+            return await asyncio.to_thread(cmd_top, kind)
+        if t.lower().startswith("/status"):
+            return await cmd_status()
+        if t.lower().startswith("/alerts"):
+            return "✅ Alerts — sin alertas (Fase D)"
+        if t.lower() in ("/pong", "pong"):
+            return "pong"
+        return f"❓ Desconocido: {t}\n{HELP}"
+
+    async def handle_slash(t: str, user: str) -> str:
+        low = t.lower()
+        if low == "/help":
+            return HELP
+        if low.startswith("/get "):
+            return await handle_get(t, user)
+        if low.startswith("/docs"):
+            return await handle_docs(t[5:].strip() or t)
+        if low.startswith("/notifs") or low.startswith("/history"):
+            return await handle_notifs(t, user)
+        if low.startswith("/investiga") or low.startswith("/investigate"):
+            return await handle_investigate(t, user)
+        return await handle_misc(t, user)
+
+    async def handle(text: str, user: str) -> str:
+        if not check_rate():
+            return "⏳ Rate limit 5/min"
+        t = text.strip()
+        if not t:
+            return HELP
+        if not t.startswith("/"):
+            return await handle_ollama(t)
+        return await handle_slash(t, user)
+
+    async def poll():
+        global OFF
+        if not TOKEN:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=35) as c:
+                r = await c.get(f"{TG_API}/getUpdates", params={"offset": OFF, "timeout": 30})
+                for u in r.json().get("result", []):
+                    OFF = u["update_id"] + 1
+                    m = u.get("message", {})
+                    if str(m.get("chat", {}).get("id")) != str(CHAT_ID):
+                        continue
+                    txt = m.get("text", "").strip()
+                    if not txt:
+                        continue
+                    log.info(f"recv: {txt}")
+                    reply = await handle(txt, str(m.get("from", {}).get("id")))
+                    await send(reply)
+        except Exception as e:
+            log.warning(f"poll err: {e}")
+
+    @app.on_event("startup")
+    async def startup():
+        log.info("cluster-ai starting — polling 3s + monitor 5m")
+        try:
+            from apscheduler.schedulers.asyncio import AsyncIOScheduler
+            import monitor
+            sched = AsyncIOScheduler()
+            monitor.create_monitor(sched)
+            sched.start()
+            log.info("monitor scheduler started")
+        except Exception as e:
+            log.warning(f"monitor start fail: {e}")
+        asyncio.create_task(poll_loop())
+
+    async def poll_loop():
+        while True:
+            await poll()
+            await asyncio.sleep(3)
+
+    @app.get("/health")
+    async def health():
+        return {"ok": True}
+
+    @app.post("/reindex")
+    async def reindex():
+        try:
+            import rag
+            cnt = await asyncio.to_thread(rag.index_docs)
+            return {"ok": True, "chunks": cnt}
+        except Exception as e:
+            log.warning(f"reindex fail: {e}")
+            return {"ok": False, "error": str(e)}
+
+    @app.post("/simulate")
+    async def simulate(payload: dict):
+        text = payload.get("text", "")
+        user = payload.get("user", "test-sim")
+        reply = await handle(text, user)
+        return {"reply": reply}
+
+    @app.get("/debug/rag")
+    async def debug_rag(q: str, k: int = 3):
+        import rag
+        res = await asyncio.to_thread(rag.query_docs, q, k)
+        return {"query": q, "k": k, "count": len(res), "results": [{"file": fp, "line": line, "preview": txt[:400]} for txt, fp, line in res]}
+  rag.py: |
+    import os, pathlib
+
+    def chunk_md(file_path: str):
+        text = pathlib.Path(file_path).read_text(encoding='utf-8', errors='ignore')
+        lines = text.splitlines()
+        chunks = []
+        current = []
+        start_line = 1
+        for i, line in enumerate(lines, 1):
+            if line.startswith("## ") and current:
+                chunks.append(("\n".join(current), file_path, start_line))
+                current = [line]
+                start_line = i
+            else:
+                current.append(line)
+        if current:
+            chunks.append(("\n".join(current), file_path, start_line))
+        result = []
+        for txt, fp, sl in chunks:
+            tokens = txt.split()
+            if len(tokens) <= 500:
+                result.append((txt, fp, sl))
+            else:
+                for j in range(0, len(tokens), 450):
+                    sub = " ".join(tokens[j:j+500])
+                    result.append((sub, fp, sl + j))
+                    if j + 500 >= len(tokens):
+                        break
+        return result
+
+    def mock_embed(texts):
+        import hashlib
+        vecs = []
+        for t in texts:
+            h = hashlib.md5(t.encode()).digest()
+            vec = []
+            for i in range(384):
+                vec.append((h[i % len(h)] - 128) / 128.0)
+            vecs.append(vec)
+        return vecs
+
+    try:
+        from sentence_transformers import SentenceTransformer
+        _model = None
+        def get_model():
+            global _model
+            if _model is None:
+                _model = SentenceTransformer('all-MiniLM-L6-v2')
+            return _model
+        def embed(texts):
+            return get_model().encode(texts, normalize_embeddings=True).tolist()
+    except Exception:
+        embed = mock_embed
+
+    # Use in-memory chroma directly to avoid Persistent hang
+    try:
+        import chromadb
+        _client = chromadb.Client()
+        def get_collection():
+            return _client.get_or_create_collection("docs")
+    except Exception as e:
+        print(f"chroma fail {e}")
+        _mock_store = []
+        def get_collection():
+            class MockColl:
+                def add(self, ids, embeddings, documents, metadatas):
+                    for doc, meta in zip(documents, metadatas):
+                        _mock_store.append((doc, meta))
+                def query(self, query_embeddings, n_results=3):
+                    docs = [d[0] for d in _mock_store[:n_results]]
+                    metas = [d[1] for d in _mock_store[:n_results]]
+                    return {"documents": [docs], "metadatas": [metas]}
+                def delete(self, where=None):
+                    _mock_store.clear()
+                def count(self):
+                    return len(_mock_store)
+            return MockColl()
+
+    def index_docs(base="/cache/docs"):
+        coll = get_collection()
+        try:
+            coll.delete(where={})
+        except:
+            pass
+        docs = list(pathlib.Path(base).rglob("*.md"))
+        all_chunks = []
+        for fp in docs:
+            all_chunks.extend(chunk_md(str(fp)))
+        if not all_chunks:
+            return 0
+        texts = [c[0] for c in all_chunks]
+        metas = [{"file": c[1].replace(base+"/", ""), "line": c[2]} for c in all_chunks]
+        ids = [f"{m['file']}:{m['line']}:{i}" for i, m in enumerate(metas)]
+        embs = embed(texts)
+        batch = 100
+        for i in range(0, len(ids), batch):
+            coll.add(ids=ids[i:i+batch], embeddings=embs[i:i+batch], documents=texts[i:i+batch], metadatas=metas[i:i+batch])
+        return len(all_chunks)
+
+    def query_docs(question: str, k=3):
+        coll = get_collection()
+        q_emb = embed([question])
+        res = coll.query(query_embeddings=q_emb, n_results=k)
+        docs = res.get("documents", [[]])[0]
+        metas = res.get("metadatas", [[]])[0]
+        out = []
+        for d, m in zip(docs, metas):
+            out.append((d, m.get("file", "?"), m.get("line", 0)))
+        # Keyword boost for VIP/NFS: if query contains VIP and no result has 192.168.1.30, search keyword
+        if "vip" in question.lower() and not any("192.168.1.30" in d for d, _, _ in out):
+            # Fallback keyword search for VIP
+            import pathlib as pl
+            all_chunks = []
+            for fp in pl.Path("/cache/docs").rglob("*.md"):
+                txt = fp.read_text(encoding="utf-8", errors="ignore")
+                if "192.168.1.30" in txt:
+                    # Find line number
+                    for i, line in enumerate(txt.splitlines(), 1):
+                        if "192.168.1.30" in line:
+                            all_chunks.append((line, str(fp).replace("/cache/docs/", ""), i))
+                            break
+                    if len(all_chunks) >= k:
+                        break
+            if all_chunks:
+                return all_chunks[:k]
+        return out
+  monitor.py: |
+    import asyncio, logging, time
+    from kubernetes import client, config
+    import httpx
+
+    log = logging.getLogger("monitor")
+
+    # Config
+    TELEGRAM_BOT_URL = "http://telegram-bot.pods.svc:8080/notify"
+    CHECK_INTERVAL = 300  # 5m
+
+    def k8s():
+        try:
+            config.load_incluster_config()
+        except:
+            config.load_kube_config()
+        return client.CoreV1Api(), client.AppsV1Api(), client.CustomObjectsApi()
+
+    async def notify(text: str):
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                await c.post(TELEGRAM_BOT_URL, json={"text": text})
+                log.info(f"notify sent: {text[:100]}")
+        except Exception as e:
+            log.warning(f"notify fail: {e}")
+
+    def check_pods() -> list:
+        v1, _, _ = k8s()
+        issues = []
+        for p in v1.list_pod_for_all_namespaces().items:
+            for cs in (p.status.container_statuses or []):
+                if cs.state.waiting and cs.state.waiting.reason == "CrashLoopBackOff":
+                    issues.append(f"🔥 CrashLoop {p.metadata.namespace}/{p.metadata.name} restarts={cs.restart_count}")
+            if p.status.phase == "Pending":
+                age = time.time() - p.metadata.creation_timestamp.timestamp() if p.metadata.creation_timestamp else 0
+                if age > 300:
+                    issues.append(f"⏳ Pending {p.metadata.namespace}/{p.metadata.name} {int(age/60)}m")
+        return issues
+
+    def check_nodes() -> list:
+        v1, _, _ = k8s()
+        issues = []
+        for n in v1.list_node().items:
+            for cond in n.status.conditions:
+                if cond.type == "Ready" and cond.status != "True":
+                    issues.append(f"❌ NodeNotReady {n.metadata.name} {cond.reason}")
+                if cond.type == "DiskPressure" and cond.status == "True":
+                    issues.append(f"⚠️ DiskPressure {n.metadata.name}")
+                if cond.type == "MemoryPressure" and cond.status == "True":
+                    issues.append(f"⚠️ MemoryPressure {n.metadata.name}")
+        return issues
+
+    def check_storage() -> list:
+        issues = []
+        try:
+            import socket
+            s = socket.create_connection(("192.168.1.30", 2049), timeout=3)
+            s.close()
+        except Exception as e:
+            issues.append(f"🔥 Storage VIP 192.168.1.30 unreachable: {e}")
+        return issues
+
+    def check_etcd() -> list:
+        issues = []
+        try:
+            import httpx
+            tok = open("/var/run/secrets/kubernetes.io/serviceaccount/token").read()
+            with httpx.Client(verify=False, timeout=5) as c:
+                r = c.get("https://10.96.0.1:443/readyz", headers={"Authorization": f"Bearer {tok}"})
+                if r.status_code != 200 or "ok" not in r.text.lower():
+                    issues.append(f"❌ etcd readyZ {r.status_code} {r.text[:100]}")
+        except Exception as e:
+            issues.append(f"❌ etcd readyZ error: {e}")
+        return issues
+
+    def check_certs() -> list:
+        _, _, custom = k8s()
+        issues = []
+        try:
+            from datetime import datetime, timezone
+            certs = custom.list_cluster_custom_object(group="cert-manager.io", version="v1", plural="certificates")
+            now = datetime.now(timezone.utc)
+            for c in certs.get("items", []):
+                ns, name = c["metadata"]["namespace"], c["metadata"]["name"]
+                exp = c.get("status", {}).get("notAfter")
+                if exp:
+                    days = (datetime.fromisoformat(exp.replace("Z", "+00:00")) - now).days
+                    if days < 30:
+                        issues.append(f"⏰ Cert {ns}/{name} expires in {days}d")
+                for cond in c.get("status", {}).get("conditions", []):
+                    if cond.get("type") == "Ready" and cond.get("status") != "True":
+                        issues.append(f"🔴 CertNotReady {ns}/{name} {cond.get('message','')[:50]}")
+        except Exception as e:
+            log.warning(f"cert check fail: {e}")
+        return issues
+
+    async def run_checks():
+        log.info("monitor 5m check start")
+        all_issues = []
+        try:
+            all_issues += await asyncio.to_thread(check_pods)
+            all_issues += await asyncio.to_thread(check_nodes)
+            all_issues += await asyncio.to_thread(check_storage)
+            all_issues += await asyncio.to_thread(check_etcd)
+            all_issues += await asyncio.to_thread(check_certs)
+        except Exception as e:
+            log.warning(f"monitor error: {e}")
+            return
+        if not all_issues:
+            log.info("monitor healthy")
+            return
+        # Deduplicate and limit
+        uniq = list(dict.fromkeys(all_issues))[:10]
+        text = "🚨 Cluster Alert\n" + "\n".join(uniq)
+        if len(text) > 3000:
+            text = text[:3000]
+        await notify(text)
+        log.info(f"monitor alert sent {len(uniq)} issues")
+
+    def create_monitor(scheduler):
+        scheduler.add_job(run_checks, "interval", seconds=CHECK_INTERVAL, id="monitor", replace_existing=True)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-ai-api
+  namespace: ia
+  labels:
+    app: cluster-ai-api
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  progressDeadlineSeconds: 1200
+  selector:
+    matchLabels:
+      app: cluster-ai-api
+  template:
+    metadata:
+      labels:
+        app: cluster-ai-api
+    spec:
+      serviceAccountName: cluster-ai-sa
+      nodeSelector:
+        eu.elarreglador/worker: "true"
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: install-deps
+          image: python:3.12-slim
+          command: [sh, -c, "apt-get update && apt-get install -y --no-install-recommends build-essential nmap iputils-ping iproute2 net-tools dnsutils arp-scan libpcap0.8 libdbus-1-3 libblas3 libidn2-0 libbpf1 libelf1 libmnl0 libunistring5 && pip install --no-cache-dir --target /tmp/deps -r /app/requirements.txt && mkdir -p /tmp/lib && cp /usr/bin/nmap /tmp/nmap 2>/dev/null || true; cp /bin/ping /tmp/ping 2>/dev/null || true; cp /usr/sbin/ip /tmp/ip 2>/dev/null || true; for lib in libpcap.so libssh2.so libunistring.so liblinear.so liblua5.4.so libdbus-1.so libblas.so libidn2.so libbpf.so libelf.so libmnl.so libcap.so; do cp /usr/lib/x86_64-linux-gnu/$lib* /tmp/lib/ 2>/dev/null || true; cp /lib/x86_64-linux-gnu/$lib* /tmp/lib/ 2>/dev/null || true; done; ldconfig 2>/dev/null || true"]
+          volumeMounts:
+            - name: code
+              mountPath: /app
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: 2000m, memory: 2Gi}
+      containers:
+        - name: api
+          image: python:3.12-slim
+          command: [sh, -c, "LD_LIBRARY_PATH=/tmp/lib:/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH PATH=/tmp:$PATH PYTHONPATH=/tmp/deps:$PYTHONPATH python -m uvicorn app:app --host 0.0.0.0 --port 8000 --app-dir /app"]
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: TELEGRAM_AI_TOKEN
+              valueFrom:
+                secretKeyRef: {name: cluster-ai-secret, key: TELEGRAM_AI_TOKEN}
+            - name: TELEGRAM_CHAT_ID
+              valueFrom:
+                secretKeyRef: {name: cluster-ai-secret, key: TELEGRAM_CHAT_ID}
+            - name: OLLAMA_URL
+              value: "http://ollama.ia.svc:11434"
+            - name: MODEL
+              value: "qwen2.5-coder:3b"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HF_HOME
+              value: "/tmp/hf_cache"
+            - name: TRANSFORMERS_CACHE
+              value: "/tmp/hf_cache"
+            - name: SENTENCE_TRANSFORMERS_HOME
+              value: "/tmp/hf_cache"
+            - name: HF_HUB_CACHE
+              value: "/tmp/hf_cache"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {cpu: 1000m, memory: 2Gi}
+          startupProbe:
+            httpGet: {path: /health, port: 8000}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 12
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: 8000}
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: code
+              mountPath: /app
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: whitelist
+              mountPath: /config
+              readOnly: true
+            - name: docs-cache
+              mountPath: /cache
+      volumes:
+        - name: code
+          configMap: {name: cluster-ai-code, defaultMode: 0444}
+        - name: tmp
+          emptyDir: {}
+        - name: whitelist
+          configMap: {name: cluster-ai-whitelist}
+        - name: docs-cache
+          persistentVolumeClaim: {claimName: docs-cache}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cluster-ai-api
+  namespace: ia
+  labels:
+    app: cluster-ai-api
+spec:
+  selector:
+    app: cluster-ai-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
