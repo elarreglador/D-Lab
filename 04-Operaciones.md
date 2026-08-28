@@ -2,8 +2,9 @@
 
 **Objetivo**: apagar y encender el cluster D-Lab (D1 + D2) de forma controlada y segura, minimizando el riesgo de problemas tanto durante el apagado como durante el arranque.
 
-**Estado**: procedimiento validado con arranque real del cluster `(verificado 2026-08-14)`. Observaciones del drill:
+**Estado**: procedimiento validado con arranque real del cluster `(verificado 2026-08-14)` y ciclo completo apagado/encendido con mapeo IP permanente `(verificado 2026-08-28)`. Observaciones del drill:
 - El race GlusterFS↔NFS-Ganesha se manifestó tal como se documenta: `nfs-ganesha` quedaba `active` (systemd) **sin export creado** (`showmount` vacío), por lo que los montajes NFS fallaban con `access denied`. Tras el drill se reforzó el script para detectar y auto-reparar esta condición (ver [Arranque controlado](#arranque-controlado)).
+- El 2026-08-28 se detectó Grafana sin datos en `k8s-master-2`/`k8s-worker-2` por `kubelet` sin `--node-ip` (`InternalIP` `10.244.x.0` en vez de `192.168.1.x`); se fijó `--node-ip` permanente (`.21/.22/.31/.32`) y se corrigió el dashboard `D1 · k8s-worker-1` de `192.168.1.30:9100` a `31:9100` (ver `incidentes/grafana-sin-datos-d2-mapeo-ip.md`).
 
 **Alcance**: cluster Kubernetes + hosts D1/D2. En un apagado normal **DV0 se deja encendido** (preserva WireGuard, nginx y el acceso remoto); para apagado total del laboratorio usar `INCLUDE_DV0=1`.
 

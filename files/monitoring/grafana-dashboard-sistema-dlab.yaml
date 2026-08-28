@@ -217,7 +217,7 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
-              "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.30:9100\", mode=\"idle\"}[5m])) * 100",
+              "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.31:9100\", mode=\"idle\"}[5m])) * 100",
               "legendFormat": "CPU",
               "range": true,
               "refId": "A"
@@ -225,7 +225,7 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
-              "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance=\"192.168.1.30:9100\"} / node_memory_MemTotal_bytes{instance=\"192.168.1.30:9100\"})",
+              "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance=\"192.168.1.31:9100\"} / node_memory_MemTotal_bytes{instance=\"192.168.1.31:9100\"})",
               "legendFormat": "RAM",
               "range": true,
               "refId": "B"
