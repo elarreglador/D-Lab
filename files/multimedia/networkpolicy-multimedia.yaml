@@ -1,0 +1,124 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: media-public
+  namespace: multimedia
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [jellyfin, qbittorrent, amule]
+  policyTypes:
+    - Ingress
+  ingress:
+    # ingress-nginx → jellyfin 8096
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8096
+    # ingress-nginx → qbittorrent 8080
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+    # ingress-nginx → amule 4711
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 4711
+    # LAN directa a los 3 servicios
+    - from:
+        - ipBlock:
+            cidr: 192.168.1.0/24
+      ports:
+        - protocol: TCP
+          port: 8096
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 4711
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: qbittorrent-allow-torrent
+  namespace: multimedia
+spec:
+  podSelector:
+    matchLabels:
+      app: qbittorrent
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 6881
+        - protocol: UDP
+          port: 6881
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: amule-allow-p2p
+  namespace: multimedia
+spec:
+  podSelector:
+    matchLabels:
+      app: amule
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 4662
+        - protocol: TCP
+          port: 4712
+        - protocol: UDP
+          port: 4672
+        - protocol: UDP
+          port: 4665
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: multimedia-egress
+  namespace: multimedia
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0

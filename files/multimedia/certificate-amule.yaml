@@ -1,13 +1,13 @@
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: jellyseerr-elarreglador-eu
+  name: amule-elarreglador-eu
   namespace: multimedia
 spec:
-  commonName: jellyseerr.elarreglador.eu
+  commonName: amule.elarreglador.eu
   dnsNames:
-    - jellyseerr.elarreglador.eu
+    - amule.elarreglador.eu
   issuerRef:
     kind: ClusterIssuer
     name: letsencrypt-http
-  secretName: jellyseerr-elarreglador-eu-tls
+  secretName: amule-elarreglador-eu-tls

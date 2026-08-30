@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amule
+  namespace: multimedia
+  labels:
+    app: amule
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: amule
+  template:
+    metadata:
+      labels:
+        app: amule
+    spec:
+      securityContext:
+        fsGroup: 1000
+      nodeSelector:
+        eu.elarreglador/worker: "true"
+      containers:
+        - name: amule
+          image: ngosang/amule:latest
+          ports:
+            - containerPort: 4711
+              name: webui
+            - containerPort: 4712
+              name: ec
+            - containerPort: 4662
+              name: ed2k-tcp
+              protocol: TCP
+            - containerPort: 4672
+              name: kad-udp
+              protocol: UDP
+            - containerPort: 4665
+              name: ed2k-udp
+              protocol: UDP
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: TZ
+              value: Europe/Madrid
+            # ngosang/amule: WEBUI_PWD y EC password se leen de estas env si existen.
+            # Si no hay Secret, el entrypoint genera auth sin password (no deseado).
+            - name: WEBUI_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: amule-secret
+                  key: WEBUI_PWD
+                  optional: true
+            - name: EC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: amule-secret
+                  key: EC_PASSWORD
+                  optional: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          startupProbe:
+            tcpSocket:
+              port: 4711
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 36
+          readinessProbe:
+            tcpSocket:
+              port: 4711
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 4711
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          volumeMounts:
+            - name: config
+              mountPath: /home/amule/.aMule
+            - name: media
+              mountPath: /data
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: amule-config
+        - name: media
+          persistentVolumeClaim:
+            claimName: media-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: amule
+  namespace: multimedia
+  labels:
+    app: amule
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 192.168.1.54
+  externalTrafficPolicy: Local
+  selector:
+    app: amule
+  ports:
+    - name: webui
+      port: 4711
+      targetPort: 4711
+---
+# Puertos P2P eDonkey/KAD expuestos como NodePort para la cadena pública DV0→D1→NodePort
+apiVersion: v1
+kind: Service
+metadata:
+  name: amule-p2p
+  namespace: multimedia
+  labels:
+    app: amule
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 192.168.1.55
+  externalTrafficPolicy: Local
+  selector:
+    app: amule
+  ports:
+    - name: ed2k-tcp
+      port: 4662
+      targetPort: 4662
+      protocol: TCP
+      nodePort: 31682
+    - name: kad-udp
+      port: 4672
+      targetPort: 4672
+      protocol: UDP
+      nodePort: 31683
+    - name: ed2k-udp
+      port: 4665
+      targetPort: 4665
+      protocol: UDP
+      nodePort: 31684

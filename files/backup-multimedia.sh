@@ -14,7 +14,7 @@ set -u
 BACKUP_DIR=/backup/multimedia
 DATE=$(date +%Y%m%d-%H%M%S)
 NS=multimedia
-APPS="sonarr radarr prowlarr qbittorrent jellyfin jellyseerr"
+APPS="qbittorrent jellyfin amule"
 
 HOST=$(hostname)
 case "$HOST" in
@@ -33,9 +33,9 @@ for app in $APPS; do
     continue
   fi
 
-  # La mayoría de imágenes *lsio guardan en /config, pero jellyseerr usa /app/config.
+  # qBittorrent/Jellyfin usan /config; aMule usa /home/amule/.aMule
   case "$app" in
-    jellyseerr) CFG=/app/config ;;
+    amule) CFG=/home/amule/.aMule ;;
     *) CFG=/config ;;
   esac
 

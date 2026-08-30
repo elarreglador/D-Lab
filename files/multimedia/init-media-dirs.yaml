@@ -15,7 +15,7 @@ spec:
       containers:
         - name: mkdir
           image: busybox:1.36
-          command: ["sh", "-c", "mkdir -p /data/torrents/movies /data/torrents/tv /data/media/movies /data/media/tv && chown -R 1000:1000 /data/torrents /data/media && find /data/torrents /data/media -type d -exec chmod 775 {} + && find /data/torrents /data/media -type f -exec chmod 664 {} + && chmod 775 /data/torrents /data/media"]
+          command: ["sh", "-c", "mkdir -p /data/torrents/movies /data/torrents/tv /data/media/movies /data/media/tv /data/amule/incoming /data/amule/temp && chown -R 1000:1000 /data/torrents /data/media /data/amule && find /data/torrents /data/media /data/amule -type d -exec chmod 775 {} + && find /data/torrents /data/media /data/amule -type f -exec chmod 664 {} + && chmod 775 /data/torrents /data/media /data/amule"]
           volumeMounts:
             - name: media
               mountPath: /data

@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: amule
+  namespace: multimedia
+  annotations:
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: amule.elarreglador.eu
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: amule
+                port:
+                  number: 4711
+  tls:
+    - hosts:
+        - amule.elarreglador.eu
+      secretName: amule-elarreglador-eu-tls
