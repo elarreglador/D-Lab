@@ -22,24 +22,83 @@ Descarga manual por dos vías — **qBittorrent (torrent)** y **aMule (eDonkey/K
 
 ### Almacenamiento
 
-- **`media-data`**: PVC 400Gi RWX sobre `nfs-storage-v4` (GlusterFS/NFS-Ganesha, VIP `192.168.1.30`), montado en `/data`. Subárboles: `/data/media/{tv,movies}` (biblioteca Jellyfin), `/data/torrents/{tv,movies}` (qBittorrent) y `/data/amule/{incoming,temp}` (aMule). Owner `1000:1000` (`abc`).
+- **`media-data`**: PVC 400Gi RWX sobre `nfs-storage-v4` (GlusterFS/NFS-Ganesha, VIP `192.168.1.30`), montado en `/data` en los 3 Deployments (`files/multimedia/{qbittorrent,jellyfin,amule}.yaml:77,66,89` → `/data`). Subárboles: `/data/media/{tv,movies}` (biblioteca Jellyfin), `/data/torrents/{tv,movies}` (qBittorrent) y `/data/amule/{incoming,temp}` (aMule). Owner `1000:1000` (`abc`).
 - **Configs**: 3 PVC NFS `*-config` sobre `nfs-storage-v4` (1 por app, 2Gi): `qbittorrent-config` → `/config`, `jellyfin-config` → `/config`, `amule-config` → `/home/amule/.aMule`. Todos móviles entre workers (`eu.elarreglador/worker=true`). Los PV/PVC `local-static` y `*-config-local` de Sonarr/Radarr/Prowlarr/Jellyseerr se eliminaron el 2026-08-29 (ver git log `files/multimedia/_retirado/`). Historial del gotcha SQLite sobre NFS (fsync ~66 ms en Gluster-HDD) queda en `files/multimedia/_retirado/` y en el git log.
-- **Permisos de `/data`** (`verificado 2026-08-15`): los archivos vía NFS quedan con uid `4294967294` (squash) pero `chown 1000:1000` persiste (`abc:users`). El job `init-media-dirs` (`files/multimedia/init-media-dirs.yaml`) hace `mkdir -p /data/torrents/{movies,tv} /data/media/{movies,tv} /data/amule/{incoming,temp}` + `chown -R 1000:1000` + `chmod 775/664`; reaplicar si se pierden permisos.
+- **Permisos de `/data`** (`verificado 2026-08-15`): los archivos vía NFS quedan con uid `4294967294` (squash) pero `chown 1000:1000` persiste (`abc:users`). El job `init-media-dirs` (`files/multimedia/init-media-dirs.yaml`) crea la estructura y los symlinks idempotentes (ver Flujo); reaplicar si se pierden permisos.
 
-### Uso (manual, sin wizard)
+### Flujo automático descarga → catálogo (`verificado 2026-08-31`)
 
-Solo dos formas de descarga, ambas manuales y sin automatización *arr:
+Sin `mv` manual ni `Scan` manual. Todo lo descargado por **qBittorrent** o **aMule** aparece en `/data/media` y Jellyfin lo indexa solo vía `CronJob` horario.
 
-- **qBittorrent (torrent)**: WebUI `https://torrent.elarreglador.eu` (o LAN `192.168.1.58:8080`) con login propio (usuario `elarreglador`). Subida de `.torrent`/magnet → `save_path` en `/data/torrents`. No hay wizard `*arr`; mover manualmente el contenido completado a `/data/media/{movies,tv}` y escanear en Jellyfin (`Library → Scan` o `POST /Library/Refresh`).
-- **aMule (eDonkey/KAD)**: WebUI `https://amule.elarreglador.eu` (o LAN `192.168.1.54:4711`) con login (`amule-secret` → `WEBUI_PWD`/`EC_PASSWORD` vía `AMULE_WEB_PWD`/`AMULE_EC_PWD` en `deploy-multimedia.sh`). Configurar `IncomingDir=/data/amule/incoming` y `TempDir=/data/amule/temp` en `amule.conf` (o vía WebUI → Preferences). Tras completar, mover a `/data/media`.
+```
+qBittorrent WebUI  https://torrent.elarreglador.eu (192.168.1.58:8080)
+  |  .torrent/magnet → save_path=/data/torrents/movies (o /tv si se categoriza)
+  v
+PVC media-data 400Gi RWX nfs-storage-v4 (VIP 192.168.1.30) montado en /data
+  |  /data/torrents/movies --symlink--> /data/media/movies   (a)
+  |  /data/torrents/tv     --symlink--> /data/media/tv       (a)
+  v
+Jellyfin  https://jellyfin.elarreglador.eu (192.168.1.53:8096)
+  |  librerías Movies → /data/media/movies, TV Shows → /data/media/tv
+  |  CronJob jellyfin-auto-scan 0 * * * * (Forbid) → POST /Library/Refresh (b)
+  v
+Catálogo Jellyfin  BaseItems → /Items?SearchTerm=... (c)
+
+aMule WebUI  https://amule.elarreglador.eu (192.168.1.54:4711)
+  |  IncomingDir=/data/amule/incoming, TempDir=/data/amule/temp
+  |  /data/amule/incoming/movies --symlink--> /data/media/movies   (a)
+  |  /data/amule/incoming/tv     --symlink--> /data/media/tv       (a)
+  +--> (mismo PVC y mismo CronJob que qBittorrent)
+
+(a) Job init-media-dirs (files/multimedia/init-media-dirs.yaml:29) crea/mantiene los symlinks
+    idempotentes; si existe un directorio real lo migra con mv -n a /data/media y lo
+    reemplaza por ln -sf. Sin este paso el flujo se rompe tras un redeploy limpio.
+(b) CronJob jellyfin-auto-scan (files/multimedia/jellyfin-auto-scan.yaml:9) cada 60 min,
+    concurrencyPolicy Forbid, startingDeadline 300, activeDeadline 3300, ttl 3600,
+    imagen curlimages/curl, POST http://jellyfin:8096/Library/Refresh con API key
+    (Secret jellyfin-apikey, gitignored). NetworkPolicy media-public
+    (files/multimedia/networkpolicy-multimedia.yaml:55) permite podSelector: {} → 8096
+    intra-namespace para que el scanner alcance a Jellyfin. Sin el Cron, inotify sobre
+    nfs-ganesha no propaga eventos entre pods y Jellyfin no ve el fichero hasta su
+    ScheduledTask interna (horas). El script scripts/deploy-multimedia.sh:56
+    garantiza de forma idempotente el Secret y la fila ApiKeys
+    jellyfin-auto-scan (Job jellyfin-ensure-apikey con sqlite sobre
+    jellyfin-config, INSERT OR IGNORE, espera a que jellyfin.db exista);
+    si el Secret ya existe lo reutiliza, sin exponer el token en logs ni en git.
+(c) BaseItems en jellyfin.db y API /Items; ver Verificación.
+```
+
+- **qBittorrent (torrent)**: WebUI `https://torrent.elarreglador.eu` (LAN `192.168.1.58:8080`) login `elarreglador` (`/config/qBittorrent/qBittorrent.conf`). Subida `.torrent`/magnet con `savepath=/data/torrents/movies` (todo a `movies` por decisión operativa; si se categoriza `tv` va a `/data/torrents/tv → /data/media/tv`). `DefaultSavePath=/data/torrents` pero el Job garantiza que `/data/torrents/movies` y `/tv` son symlinks a `/data/media`. No hay wizard `*arr`.
+- **aMule (eDonkey/KAD)**: WebUI `https://amule.elarreglador.eu` (LAN `192.168.1.54:4711`) login `amule-secret` (`WEBUI_PWD`/`EC_PASSWORD` vía `AMULE_WEB_PWD`/`AMULE_EC_PWD` en `deploy-multimedia.sh`). `IncomingDir=/data/amule/incoming`, `TempDir=/data/amule/temp` (`amule.conf` o WebUI → Preferences). Mismo mecanismo de symlinks `.../incoming/movies → /data/media/movies` y `.../tv → /data/media/tv`; el Cron es común.
 - **Jellyfin**: `https://jellyfin.elarreglador.eu` (LAN `192.168.1.53:8096`), usuario `elarreglador` (admin), librerías `Movies` → `/data/media/movies` y `TV Shows` → `/data/media/tv` (verificado 2026-08-15). Solo indexa `/data/media`.
-- **Retirados (2026-08-29)**: cadena automática `Jellyseerr → Sonarr/Radarr → Prowlarr → FlareSolverr + es-badge` eliminada por completo. `scripts/_retirado/multimedia-wizard.sh` (bootstrap *arr/Prowlarr/Jellyseerr), `multimedia-language.sh`/`multimedia-verify.sh` y los manifiestos `files/multimedia/_retirado/sonarr|radarr|prowlarr|flaresolverr|jellyseerr|es-badge.yaml` ya no aplican; conservados en `_retirado/` por histórico. No hay indexadores ni búsqueda automática.
+- **Retirados (2026-08-29)**: cadena automática `Jellyseerr → Sonarr/Radarr → Prowlarr → FlareSolverr + es-badge` eliminada. `scripts/_retirado/multimedia-wizard.sh`, `multimedia-language.sh`/`multimedia-verify.sh` y manifiestos `files/multimedia/_retirado/...` conservados por histórico. No hay indexadores ni búsqueda automática.
+
+#### Verificación (`verificado 2026-08-31`)
+
+```bash
+# Filesystem: el symlink hace el fichero visible al instante en ambos montajes
+kubectl -n multimedia exec deploy/qbittorrent -- ls -l /data/torrents/movies   # movies -> /data/media/movies
+kubectl -n multimedia exec deploy/jellyfin   -- ls -lh /data/media/movies/TEST_Video_Libre_2026-08-31.avi
+
+# Catálogo: el Cron dispara el scan (o forzarlo)
+kubectl -n multimedia create job jellyfin-auto-scan-manual --from=cronjob/jellyfin-auto-scan
+kubectl -n multimedia wait --for=condition=complete job/jellyfin-auto-scan-manual --timeout=60s
+kubectl -n multimedia logs job/jellyfin-auto-scan-manual  # → HTTP 204 Scan triggered
+
+# Jellyfin indexa (BaseItems y API)
+kubectl -n multimedia exec deploy/jellyfin -- sqlite3 /config/data/data/jellyfin.db "SELECT Name,Path FROM BaseItems WHERE Path LIKE '%TEST%'"
+# o vía API (con API key del Secret)
+curl -H "X-Emby-Token: $KEY" "http://jellyfin:8096/Items?Recursive=true&SearchTerm=TEST"  # → TotalRecordCount 1, MovieCount 3→2 tras rm + rescan
+```
+
+Prueba con fichero dummy 5 MiB `TEST_Video_Libre_2026-08-31.avi` (cabecera válida copiada de avi existente) creado en `/data/torrents/movies` vía `qbittorrent` pod: `MovieCount 2→3` y `TotalRecordCount 1` tras el `POST /Library/Refresh`; tras `rm` y nuevo scan `Total 0, MovieCount 2`. La misma cadena aplica a aMule (`/data/amule/incoming/movies → /data/media/movies`).
 
 ### Estado y notas
 
 - **Jellyfin**: primer usuario `elarreglador` (admin) con librerías `Movies` (id `f137a2dd...`) → `/data/media/movies` y `TV Shows` (id `767bff...`) → `/data/media/tv` (verificado 2026-08-15).
 - **qBittorrent**: login WebUI `forms` user `elarreglador` (configurado en `/config/qBittorrent/qBittorrent.conf`); `save_path=/data/torrents`, `temp_path` opcional. Backup en `/config`.
 - **aMule**: `amuled` + `amuleweb` (4711). Credenciales en Secret `amule-secret` (`WEBUI_PWD`/`EC_PASSWORD`) vía `AMULE_WEB_PWD`/`AMULE_EC_PWD` en `deploy-multimedia.sh` (nunca en repo). Config `amule.conf` en `/home/amule/.aMule`; `IncomingDir`/`TempDir` apuntan a `/data/amule/{incoming,temp}`. Retirados es-badge/Jellyseerr (ver `_retirado/`).
+- **Jellyfin auto-scan**: `CronJob jellyfin-auto-scan` `0 * * * *` `Forbid` → `POST http://jellyfin:8096/Library/Refresh` con API key (`Secret jellyfin-apikey`, gitignored); garantizado de forma idempotente por `scripts/deploy-multimedia.sh:56` (genera `Secret` con `openssl rand -hex 16` si no existe y `Job jellyfin-ensure-apikey` con `sqlite` `INSERT OR IGNORE` sobre `jellyfin-config`). Verificado 2026-08-31 (`HTTP 204`, `MovieCount 2→3→2`, `TotalRecordCount 1→0`).
 - **qBittorrent P2P expuesto**: `TCP/UDP 6881` externo via DV0 → D1 → NodePort `31681` (ver [01-Network.md](./01-Network.md)). Cadena `scripts/multimedia-expose-torrent.sh` (stream nginx en DV0 + proxies LXC `proxytorrent`/`proxytorrentudp`). TCP+UDP verificados 2026-08-16 (`nc -zv 82.223.50.169 6881` OK, DHT `find_node` 297 B, `connection_status: connected`).
 - **aMule P2P expuesto**: `4662/TCP 4672/UDP 4665/UDP` externo via DV0 → D1 → NodePorts `31682-31684` (ver `scripts/amule-expose-p2p.sh`). Ingress WebUI `amule.elarreglador.eu` (4711) con login; P2P requiere `scripts/amule-expose-p2p.sh` (proxies LXC `proxyamule*` + `stream.conf.d/amule.conf`).
 

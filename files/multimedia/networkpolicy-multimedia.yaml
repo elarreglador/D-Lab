@@ -56,6 +56,16 @@ spec:
           port: 8080
         - protocol: TCP
           port: 4711
+    # Scanner interno (CronJob jellyfin-auto-scan) y herramientas del mismo namespace
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8096
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 4711
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

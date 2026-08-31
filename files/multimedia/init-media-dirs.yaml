@@ -15,7 +15,66 @@ spec:
       containers:
         - name: mkdir
           image: busybox:1.36
-          command: ["sh", "-c", "mkdir -p /data/torrents/movies /data/torrents/tv /data/media/movies /data/media/tv /data/amule/incoming /data/amule/temp && chown -R 1000:1000 /data/torrents /data/media /data/amule && find /data/torrents /data/media /data/amule -type d -exec chmod 775 {} + && find /data/torrents /data/media /data/amule -type f -exec chmod 664 {} + && chmod 775 /data/torrents /data/media /data/amule"]
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "Creating media directory structure..."
+              mkdir -p /data/media/movies /data/media/tv /data/amule/incoming /data/amule/temp
+              mkdir -p /data/torrents
+
+              # Ensure torrents subdirs are symlinks to media (idempotent)
+              # If a real directory exists, migrate its content then replace with symlink
+              for sub in movies tv; do
+                if [ -L /data/torrents/$sub ]; then
+                  echo "  /data/torrents/$sub already symlink -> $(readlink /data/torrents/$sub)"
+                elif [ -d /data/torrents/$sub ]; then
+                  echo "  Migrating /data/torrents/$sub (real dir) -> /data/media/$sub"
+                  # Move any files that are not already in media (avoid overwriting)
+                  if [ -n "$(ls -A /data/torrents/$sub 2>/dev/null)" ]; then
+                    mv -n /data/torrents/$sub/* /data/media/$sub/ 2>/dev/null || true
+                    mv -n /data/torrents/$sub/.* /data/media/$sub/ 2>/dev/null || true
+                  fi
+                  rmdir /data/torrents/$sub 2>/dev/null || rm -rf /data/torrents/$sub
+                  ln -sf /data/media/$sub /data/torrents/$sub
+                  echo "  Created symlink /data/torrents/$sub -> /data/media/$sub"
+                else
+                  ln -sf /data/media/$sub /data/torrents/$sub
+                  echo "  Created symlink /data/torrents/$sub -> /data/media/$sub"
+                fi
+              done
+
+              # Same for aMule incoming subdirs
+              for sub in movies tv; do
+                if [ -L /data/amule/incoming/$sub ]; then
+                  echo "  /data/amule/incoming/$sub already symlink"
+                elif [ -d /data/amule/incoming/$sub ]; then
+                  if [ -n "$(ls -A /data/amule/incoming/$sub 2>/dev/null)" ]; then
+                    mv -n /data/amule/incoming/$sub/* /data/media/$sub/ 2>/dev/null || true
+                  fi
+                  rmdir /data/amule/incoming/$sub 2>/dev/null || rm -rf /data/amule/incoming/$sub
+                  ln -sf /data/media/$sub /data/amule/incoming/$sub
+                  echo "  Created symlink /data/amule/incoming/$sub -> /data/media/$sub"
+                else
+                  ln -sf /data/media/$sub /data/amule/incoming/$sub
+                  echo "  Created symlink /data/amule/incoming/$sub -> /data/media/$sub"
+                fi
+              done
+
+              echo "Setting permissions..."
+              chown -R 1000:1000 /data/media /data/amule
+              # chown on /data/torrents must not dereference symlinks excessively
+              chown -h 1000:1000 /data/torrents/movies /data/torrents/tv 2>/dev/null || true
+              chown -R 1000:1000 /data/torrents 2>/dev/null || true
+              find /data/media /data/amule -type d -exec chmod 775 {} + 2>/dev/null || true
+              find /data/media /data/amule -type f -exec chmod 664 {} + 2>/dev/null || true
+              chmod 775 /data/media /data/amule /data/torrents 2>/dev/null || true
+
+              echo "Verifying..."
+              ls -l /data/torrents/ | grep -E "movies|tv" || true
+              ls -l /data/amule/incoming/ | grep -E "movies|tv" || true
+              echo "Done."
           volumeMounts:
             - name: media
               mountPath: /data

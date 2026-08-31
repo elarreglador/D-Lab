@@ -52,6 +52,83 @@ else
 fi
 
 echo
+echo "[3/5] Garantizando API key de Jellyfin para jellyfin-auto-scan (Secret + ApiKeys)..."
+if ! ssh "$KUBECTL_HOST" "kubectl -n $NS get secret jellyfin-apikey >/dev/null 2>&1"; then
+  echo "  Secret jellyfin-apikey no existe -> generando..."
+  TOKEN="$(openssl rand -hex 16 2>/dev/null || cat /proc/sys/kernel/random/uuid | tr -d '-' | cut -c1-32)"
+  # Crear Secret sin exponer el token en logs (stdin, sin -v)
+  ssh "$KUBECTL_HOST" "kubectl -n $NS create secret generic jellyfin-apikey --from-literal=token=$TOKEN --dry-run=client -o yaml | kubectl apply -f -" >/dev/null
+  echo "  Secret jellyfin-apikey creado"
+else
+  echo "  Secret jellyfin-apikey ya existe -> reutilizando"
+fi
+# Asegurar entrada en jellyfin.db (idempotente, espera a que jellyfin cree la DB si es primer deploy)
+echo "  Asegurando ApiKeys jellyfin-auto-scan en jellyfin.db..."
+ssh "$KUBECTL_HOST" "kubectl -n $NS delete job jellyfin-ensure-apikey --ignore-not-found >/dev/null 2>&1 || true"
+cat <<'EOJ' | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jellyfin-ensure-apikey
+  namespace: multimedia
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: multimedia
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        eu.elarreglador/worker: "true"
+      containers:
+        - name: ensure
+          image: alpine:3.19
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              apk add --no-cache sqlite >/dev/null 2>&1
+              for i in $(seq 1 30); do
+                if [ -f /config/data/data/jellyfin.db ]; then break; fi
+                echo "  DB no lista, esperando... $i/30"
+                sleep 2
+              done
+              if [ ! -f /config/data/data/jellyfin.db ]; then
+                echo "  DB no encontrada tras 60s, omitiendo (se creará en próximo arranque)"
+                exit 0
+              fi
+              TOKEN=$(cat /apikey/token)
+              echo "  Insertando ApiKeys jellyfin-auto-scan..."
+              sqlite3 /config/data/data/jellyfin.db "INSERT OR IGNORE INTO ApiKeys (DateCreated, DateLastActivity, Name, AccessToken) VALUES (datetime('now'), datetime('now'), 'jellyfin-auto-scan', '$TOKEN');"
+              sqlite3 /config/data/data/jellyfin.db "SELECT Name FROM ApiKeys WHERE AccessToken='$TOKEN';" | grep -q jellyfin-auto-scan && echo "  OK ApiKeys verificado" || (echo "  FAIL ApiKeys"; exit 1)
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: apikey
+              mountPath: /apikey
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: jellyfin-config
+        - name: apikey
+          secret:
+            secretName: jellyfin-apikey
+            items:
+              - key: token
+                path: token
+EOJ
+if ssh "$KUBECTL_HOST" "kubectl -n $NS wait --for=condition=complete job/jellyfin-ensure-apikey --timeout=120s" 2>/dev/null; then
+  ssh "$KUBECTL_HOST" "kubectl -n $NS logs job/jellyfin-ensure-apikey" 2>&1 | grep -v "token" | head -n 20
+else
+  echo "  Aviso: jellyfin-ensure-apikey no completó a tiempo (jellyfin aún arrancando); se reintentará en próximo deploy"
+  ssh "$KUBECTL_HOST" "kubectl -n $NS logs job/jellyfin-ensure-apikey 2>&1 | head -n 20" 2>&1 | grep -v "token" | head -n 20 || true
+fi
+
+echo
 echo "[3/5] Desplegando aplicaciones (qbittorrent, jellyfin, amule)..."
 for app in qbittorrent jellyfin amule; do
   echo "  -> $app"
@@ -68,6 +145,8 @@ cat "$MM/certificate-qbittorrent.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -
 cat "$MM/ingress-qbittorrent.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 cat "$MM/certificate-amule.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 cat "$MM/ingress-amule.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+cat "$MM/jellyfin-auto-scan.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+echo "  CronJob jellyfin-auto-scan aplicado (0 * * * *, Forbid, activeDeadline 3300s)"
 
 echo
 echo "[5/5] Esperando a que todos los Deployments estén listos..."
