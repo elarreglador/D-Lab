@@ -22,7 +22,7 @@ D-Lab aloja servicios personales que el propietario usa y vigila. Los siguientes
 | **Grafana** | Paneles con gráficas: salud del cluster, hosts y DV0 en tiempo real | con login (Grafana) | [grafana.elarreglador.eu](https://grafana.elarreglador.eu) |
 | **Node-RED** | Herramienta visual para conectar dispositivos y servicios | con login (Node-RED) | [nodered.elarreglador.eu](https://nodered.elarreglador.eu) |
 | **SDR** | Radio definida por software (RTL-SDR v3 + Ham It Up, `rtl_tcp`) | pública, un cliente a la vez | `sdr.elarreglador.eu:1234` |
-| **Multimedia** *(ej.)* | Jellyfin, Jellyseerr, qBittorrent, Sonarr, Radarr, Prowlarr, FlareSolverr | solo en casa (LAN) | `192.168.1.53` … `192.168.1.59` (MetalLB) |
+| **Multimedia** *(ej.)* | Jellyfin + qBittorrent (torrent) + aMule (eDonkey/KAD) — simplificado 2026-08-29, retirados Jellyseerr/Sonarr/Radarr/Prowlarr/FlareSolverr/es-badge | solo en casa (LAN) + WebUI públicas con login | `192.168.1.53` Jellyfin, `192.168.1.58` qBittorrent, `192.168.1.54` aMule (MetalLB) |
 | **IA local** *(ej.)* | Ollama con modelos qwen2.5-coder:3b y otros ≤3B | solo LAN/WireGuard | `192.168.1.31:31434` / `10.8.0.11:31434` |
 | **Telegram bot** *(ej.)* | Notificaciones internas del cluster | interno (sin ingress) | `telegram-bot.pods.svc:8080` |
 | **MariaDB** | Base de datos interna de los servicios | interna | sin acceso exterior |

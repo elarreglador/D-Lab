@@ -8,7 +8,7 @@
 
 ## Stack multimedia simplificado (Jellyfin + qBittorrent + aMule)
 
-Descarga manual (qBittorrent torrent + aMule eDonkey/KAD) → servidor de medios (Jellyfin). Namespace `multimedia`. **Simplificado el 2026-08-29**: retirados Jellyseerr, Sonarr, Radarr, Prowlarr, FlareSolverr y es-badge; se mantiene Jellyfin y qBittorrent, se añade aMule. Motivo: complejidad excesiva de la cadena automática (*arr) para el uso real.
+Descarga manual por dos vías — **qBittorrent (torrent)** y **aMule (eDonkey/KAD)** — → servidor de medios **Jellyfin**. Namespace `multimedia`. **Simplificado el 2026-08-29**: retirados Jellyseerr, Sonarr, Radarr, Prowlarr, FlareSolverr y es-badge; se mantiene Jellyfin y qBittorrent, se añade aMule. **No existe cadena automática *arr**: no hay indexadores, ni Prowlarr/FlareSolverr, ni Sonarr/Radarr, ni Jellyseerr. Motivo: complejidad excesiva de la automatización para el uso real. Manifiestos retirados conservados en `files/multimedia/_retirado/` y `scripts/_retirado/` (ver git log).
 
 ### Resumen de workloads
 
@@ -28,10 +28,12 @@ Descarga manual (qBittorrent torrent + aMule eDonkey/KAD) → servidor de medios
 
 ### Uso (manual, sin wizard)
 
-- **qBittorrent**: WebUI `https://torrent.elarreglador.eu` (o LAN `192.168.1.58:8080`) con login propio (usuario `elarreglador`). Subida de `.torrent`/magnet → `save_path` en `/data/torrents`. No hay wizard `*arr`; mover manualmente el contenido completado a `/data/media/{movies,tv}` y escanear en Jellyfin (`Library → Scan` o `POST /Library/Refresh`).
-- **aMule**: WebUI `https://amule.elarreglador.eu` (o LAN `192.168.1.54:4711`) con login (`amule-secret` → `WEBUI_PWD`/`EC_PASSWORD` vía `AMULE_WEB_PWD`/`AMULE_EC_PWD` en `deploy-multimedia.sh`). Configurar `IncomingDir=/data/amule/incoming` y `TempDir=/data/amule/temp` en `amule.conf` (o vía WebUI → Preferences). Tras completar, mover a `/data/media`.
-- **Jellyfin**: `https://jellyfin.elarreglador.eu` (LAN `192.168.1.53:8096`), usuario `elarreglador` (admin), librerías `Movies` → `/data/media/movies` y `TV Shows` → `/data/media/tv` (verificado 2026-08-15).
-- **Retirados**: `scripts/_retirado/multimedia-wizard.sh` (bootstrap *arr/Prowlarr/Jellyseerr) y `multimedia-language.sh`/`multimedia-verify.sh` ya no aplican; conservados en `_retirado/` por histórico.
+Solo dos formas de descarga, ambas manuales y sin automatización *arr:
+
+- **qBittorrent (torrent)**: WebUI `https://torrent.elarreglador.eu` (o LAN `192.168.1.58:8080`) con login propio (usuario `elarreglador`). Subida de `.torrent`/magnet → `save_path` en `/data/torrents`. No hay wizard `*arr`; mover manualmente el contenido completado a `/data/media/{movies,tv}` y escanear en Jellyfin (`Library → Scan` o `POST /Library/Refresh`).
+- **aMule (eDonkey/KAD)**: WebUI `https://amule.elarreglador.eu` (o LAN `192.168.1.54:4711`) con login (`amule-secret` → `WEBUI_PWD`/`EC_PASSWORD` vía `AMULE_WEB_PWD`/`AMULE_EC_PWD` en `deploy-multimedia.sh`). Configurar `IncomingDir=/data/amule/incoming` y `TempDir=/data/amule/temp` en `amule.conf` (o vía WebUI → Preferences). Tras completar, mover a `/data/media`.
+- **Jellyfin**: `https://jellyfin.elarreglador.eu` (LAN `192.168.1.53:8096`), usuario `elarreglador` (admin), librerías `Movies` → `/data/media/movies` y `TV Shows` → `/data/media/tv` (verificado 2026-08-15). Solo indexa `/data/media`.
+- **Retirados (2026-08-29)**: cadena automática `Jellyseerr → Sonarr/Radarr → Prowlarr → FlareSolverr + es-badge` eliminada por completo. `scripts/_retirado/multimedia-wizard.sh` (bootstrap *arr/Prowlarr/Jellyseerr), `multimedia-language.sh`/`multimedia-verify.sh` y los manifiestos `files/multimedia/_retirado/sonarr|radarr|prowlarr|flaresolverr|jellyseerr|es-badge.yaml` ya no aplican; conservados en `_retirado/` por histórico. No hay indexadores ni búsqueda automática.
 
 ### Estado y notas
 

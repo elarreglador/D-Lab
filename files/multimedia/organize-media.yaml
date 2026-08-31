@@ -1,0 +1,130 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: organize-media
+  namespace: multimedia
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: multimedia
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: organize
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "=========================================="
+              echo "Organizing media - $(date)"
+              echo "=========================================="
+              echo ""
+
+              # Create unified media directory structure
+              echo "Creating unified media directory structure..."
+              mkdir -p /data/media/movies
+              mkdir -p /data/media/tv
+              mkdir -p /data/media/.trash
+              
+              echo "Setting permissions on /data/media..."
+              chmod -R 777 /data/media
+              chown -R 1000:1000 /data/media
+              
+              echo "Created:"
+              echo "  /data/media/movies  (películas)"
+              echo "  /data/media/tv      (series)"
+              echo "  /data/media/.trash  (eliminados)"
+              echo ""
+
+              # Move existing movies
+              echo "Moving movies from qBittorrent..."
+              if [ -d /data/torrents/movies ] && [ -n "$(find /data/torrents/movies -maxdepth 1 -type f)" ]; then
+                find /data/torrents/movies -maxdepth 1 -type f -exec mv {} /data/media/movies/ \; 2>/dev/null || true
+                echo "  ✓ Moved files from /data/torrents/movies"
+              fi
+
+              echo "Moving TV shows from qBittorrent..."
+              if [ -d /data/torrents/tv ] && [ -n "$(find /data/torrents/tv -maxdepth 1 -type d)" ]; then
+                find /data/torrents/tv -maxdepth 1 -type d ! -name "tv" -exec mv {} /data/media/tv/ \; 2>/dev/null || true
+                echo "  ✓ Moved folders from /data/torrents/tv"
+              fi
+
+              echo "Moving movies from aMule..."
+              if [ -d /data/amule/incoming/movies ] && [ -n "$(find /data/amule/incoming/movies -maxdepth 1 -type f)" ]; then
+                find /data/amule/incoming/movies -maxdepth 1 -type f -exec mv {} /data/media/movies/ \; 2>/dev/null || true
+                echo "  ✓ Moved files from /data/amule/incoming/movies"
+              fi
+
+              echo "Moving TV shows from aMule..."
+              if [ -d /data/amule/incoming/tv ] && [ -n "$(find /data/amule/incoming/tv -maxdepth 1 -type d)" ]; then
+                find /data/amule/incoming/tv -maxdepth 1 -type d ! -name "tv" -exec mv {} /data/media/tv/ \; 2>/dev/null || true
+                echo "  ✓ Moved folders from /data/amule/incoming/tv"
+              fi
+
+              echo ""
+              echo "Creating symlinks for live downloads..."
+              
+              # Remove old structure from download dirs
+              rm -rf /data/torrents/movies /data/torrents/tv
+              rm -rf /data/amule/incoming/movies /data/amule/incoming/tv
+              
+              # Create symlinks so new downloads go to unified media
+              echo "  Creating /data/torrents/movies → /data/media/movies"
+              ln -sf /data/media/movies /data/torrents/movies
+              
+              echo "  Creating /data/torrents/tv → /data/media/tv"
+              ln -sf /data/media/tv /data/torrents/tv
+              
+              echo "  Creating /data/amule/incoming/movies → /data/media/movies"
+              ln -sf /data/media/movies /data/amule/incoming/movies
+              
+              echo "  Creating /data/amule/incoming/tv → /data/media/tv"
+              ln -sf /data/media/tv /data/amule/incoming/tv
+              
+              echo ""
+              echo "Verifying symlinks..."
+              ls -la /data/torrents/ | grep "^l"
+              ls -la /data/amule/incoming/ | grep "^l"
+              
+              echo ""
+              echo "Setting final permissions..."
+              chmod -R 777 /data/media
+              chmod -R 777 /data/torrents
+              chmod -R 777 /data/amule/incoming
+              chown -R 1000:1000 /data/media
+              chown -R 1000:1000 /data/torrents
+              chown -R 1000:1000 /data/amule/incoming
+              
+              echo ""
+              echo "=========================================="
+              echo "✓ Media organization completed!"
+              echo "=========================================="
+              echo ""
+              echo "Final structure:"
+              echo "  /data/media/movies     ← All movie downloads (unified)"
+              echo "  /data/media/tv         ← All TV downloads (unified)"
+              echo "  /data/media/.trash     ← Deleted items"
+              echo ""
+              echo "Symlinks:"
+              echo "  /data/torrents/movies  → /data/media/movies"
+              echo "  /data/torrents/tv      → /data/media/tv"
+              echo "  /data/amule/incoming/movies → /data/media/movies"
+              echo "  /data/amule/incoming/tv    → /data/media/tv"
+              echo ""
+              echo "New downloads will automatically go to /data/media/"
+              echo "Jellyfin will scan only /data/media/"
+              echo ""
+          volumeMounts:
+            - name: media
+              mountPath: /data
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: media-data

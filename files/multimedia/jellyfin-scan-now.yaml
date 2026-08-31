@@ -1,0 +1,116 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jellyfin-scan-libraries
+  namespace: multimedia
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: multimedia
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: jellyfin-scanner
+          image: curlimages/curl:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "=========================================="
+              echo "Jellyfin Library Scan - Started at $(date)"
+              echo "=========================================="
+              
+              JELLYFIN_URL="http://jellyfin:8096"
+              
+              # Wait for Jellyfin API
+              echo "Waiting for Jellyfin API..."
+              for i in {1..30}; do
+                RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$JELLYFIN_URL/System/Info")
+                if [ "$RESPONSE" = "200" ] || [ "$RESPONSE" = "401" ]; then
+                  echo "Jellyfin API is ready (HTTP $RESPONSE)"
+                  break
+                fi
+                echo "  Attempt $i/30 - waiting..."
+                sleep 2
+              done
+              
+              # Trigger library scan
+              echo ""
+              echo "Triggering library scan for all libraries..."
+              SCAN_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+                "$JELLYFIN_URL/Library/Refresh" \
+                -H "Content-Type: application/json")
+              
+              HTTP_CODE=$(echo "$SCAN_RESPONSE" | tail -1)
+              BODY=$(echo "$SCAN_RESPONSE" | head -n -1)
+              
+              if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
+                echo "✓ Scan triggered successfully (HTTP $HTTP_CODE)"
+              else
+                echo "✗ Failed to trigger scan (HTTP $HTTP_CODE)"
+                echo "Response: $BODY"
+                exit 1
+              fi
+              
+              echo ""
+              echo "Waiting for scan to complete..."
+              echo "This may take several minutes depending on library size..."
+              echo ""
+              
+              # Poll for completion
+              TIMEOUT=600  # 10 minutes
+              INTERVAL=5
+              ELAPSED=0
+              LAST_COUNT=0
+              
+              while [ $ELAPSED -lt $TIMEOUT ]; do
+                # Get library stats
+                STATS=$(curl -s -X GET "$JELLYFIN_URL/Items/Counts" 2>/dev/null || echo "{}")
+                
+                MOVIE_COUNT=$(echo "$STATS" | grep -o '"MovieCount":[0-9]*' | cut -d: -f2 || echo "0")
+                SERIES_COUNT=$(echo "$STATS" | grep -o '"SeriesCount":[0-9]*' | cut -d: -f2 || echo "0")
+                TOTAL=$((${MOVIE_COUNT:-0} + ${SERIES_COUNT:-0}))
+                
+                if [ "$TOTAL" != "$LAST_COUNT" ]; then
+                  echo "  [$(date +'%H:%M:%S')] Items: $TOTAL (Movies: ${MOVIE_COUNT:-0}, Series: ${SERIES_COUNT:-0})"
+                  LAST_COUNT=$TOTAL
+                fi
+                
+                ELAPSED=$((ELAPSED + INTERVAL))
+                sleep $INTERVAL
+              done
+              
+              echo ""
+              echo "=========================================="
+              echo "✓ Scan completed!"
+              echo "=========================================="
+              echo "Final library counts:"
+              
+              # Get final stats
+              FINAL_STATS=$(curl -s -X GET "$JELLYFIN_URL/Items/Counts" 2>/dev/null || echo "{}")
+              FINAL_MOVIES=$(echo "$FINAL_STATS" | grep -o '"MovieCount":[0-9]*' | cut -d: -f2 || echo "0")
+              FINAL_SERIES=$(echo "$FINAL_STATS" | grep -o '"SeriesCount":[0-9]*' | cut -d: -f2 || echo "0")
+              
+              echo "  Movies: ${FINAL_MOVIES:-0}"
+              echo "  Series: ${FINAL_SERIES:-0}"
+              echo ""
+              echo "Scan finished at $(date)"
+              echo "=========================================="
