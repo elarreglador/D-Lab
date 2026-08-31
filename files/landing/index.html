@@ -12,7 +12,7 @@
   <meta property="og:title" content="David Moreno — Automatización · Infraestructura IoT · SRE">
   <meta property="og:description" content="Perfil híbrido entre electricidad y programación. Linux de vieja escuela, sistemas embebidos y fiabilidad de infraestructuras críticas.">
   <link rel="icon" href="dlab.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20260829">
+  <link rel="stylesheet" href="styles.css?v=20260831g">
   <link rel="stylesheet" href="acerca-de-ti.css?v=20260818">
   <script>
     (function () {
@@ -79,9 +79,10 @@
     <section class="section" id="monitorizacion" aria-labelledby="titulo-monitorizacion">
       <h2 id="titulo-monitorizacion">Monitorización en vivo</h2>
       <p class="bio">
-        CPU y RAM de los equipos del cluster, en directo desde Grafana. Cada tarjeta muestra el
-        uso en porcentaje durante las últimas 24 horas: el jumpbox DV0, los hosts físicos D1 y D2
-        y los cuatro nodos Kubernetes (control y trabajadores) que corren sobre ellos.
+        CPU y RAM de los equipos del cluster y estado del almacenamiento de 400 Gi, en directo
+        desde Grafana durante las últimas 24 horas: el jumpbox DV0, los hosts físicos D1 y D2,
+        los cuatro nodos Kubernetes y, abajo, el uso porcentual del volumen <code>media-data</code>
+        (400 Gi) y el tráfico de disco en MiB/s (lectura/escritura).
       </p>
       <figure class="grafana-embed">
         <iframe src="__PUBLIC_DASHBOARD_URL__?theme=dark&from=now-24h&to=now"

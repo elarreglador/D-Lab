@@ -496,8 +496,8 @@ button.btn {
 .grafana-embed iframe {
   display: block;
   width: 100%;
-  height: 670px;
-  aspect-ratio: 24 / 11;
+  height: 1050px;
+  aspect-ratio: 24 / 14;
   border: 0;
 }
 
