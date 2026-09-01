@@ -307,6 +307,36 @@ Una vez autenticado, la página principal (`/`) muestra una tabla con los dispos
 
 ---
 
+# Ancho de banda y límites P2P para priorizar multimedia (`verificado 2026-09-01`)
+
+**Línea DIGI** FIBRA `AS57269 DIGI SPAIN TELECOM` (verificado con `curl https://ipinfo.io/ip` y `curl https://ifconfig.me`).
+
+Medición cableada desde D1/D2 (no G9 WiFi, limitado a ~228 Mbit/s):
+```bash
+lxc exec k8s-master-1 -- kubectl -n multimedia exec deploy/qbittorrent -- curl -s http://localhost:8080/api/v2/transfer/info | tr ',' '\n' | grep rate_limit
+curl -o /dev/null -w '%{speed_download} B/s' http://cachefly.cachefly.net/100mb.test   # D1 74.733.338 B/s = 597 Mbit/s, D2 70.722.190 B/s = 565 Mbit/s, G9 28.502.672 B/s WiFi
+curl -X POST --data-binary @/tmp/50M.test -o /dev/null -w '%{speed_upload} B/s' http://speedtest2.digimobil.es:8080/speedtest/upload.php  # 95.809.013 B/s = 766 Mbit/s
+ping 1.1.1.1  # 6.1 ms avg, 8.8.8.8 14.2 ms
+```
+Resultado efectivo **~550-600 Mbit/s simétricos** (capacidad real medida; coherente con tarifa DIGI 600 Mb). Se toma **600 Mbit/s = 75 MB/s** como base redonda.
+
+**Política aplicada (1/3 del ancho para P2P, 2/3 libres para Jellyfin `192.168.1.53:8096`):** deja **400 Mbit/s libres** → 11×4K (35 Mbit/s) o 33×1080p (12 Mbit/s) sin bufferbloat en el ZTE H3600P.
+
+| App | Límite down | Límite up | Config viva |
+|-----|-------------|-----------|-------------|
+| qBittorrent | `19500 KiB/s` (160 Mbit/s) | `19500 KiB/s` (160 Mbit/s) | `lxc exec k8s-master-1 -- kubectl -n multimedia exec deploy/qbittorrent -- curl -s http://localhost:8080/api/v2/transfer/info` → `dl_rate_limit 19968000 / up_rate_limit 19968000 / speedLimitsMode 0` y `qBittorrent.conf: Session\GlobalDLSpeedLimit=19500 / GlobalUPSpeedLimit=19500 / AlternativeGlobalDLSpeedLimit=19500 / UseAlternativeGlobalSpeedLimit=false` (antes `100/100/5` modo 1 = 5 KiB/s cerrado) |
+| aMule | `4880 KiB/s` (40 Mbit/s) | `4880 KiB/s` (40 Mbit/s) | `lxc exec k8s-master-1 -- kubectl -n multimedia exec deploy/amule -- grep -E '^MaxDownload\|^MaxUpload' /home/amule/.aMule/amule.conf` → `4880` (antes `0` ilimitado), `MaxConnections 500 / SlotAllocation 20` |
+
+Total P2P `200 Mbit/s` = 33% del total. Ajustado vía `curl -s http://localhost:8080/api/v2/transfer/setDownloadLimit -d 'limit=19968000'` y `setUploadLimit` + `setSpeedLimitsMode 0` para qB y `sed -i 's/^MaxDownload=.*/MaxDownload=4880/'` + `sed -i 's/^MaxUpload=.*/MaxUpload=4880/'` + `rollout restart deploy/amule` para aMule. Verificado `jellyfin:8096` → `302 0.014s` desde el pod qB.
+
+ASCII horizontal (600 Mbit/s base):
+```
+BAJADA 600                    |██████████████████████████████████████████████████|
+ qB 160                      |█████████████▎                                    |
+ aMule 40                    |███▎                                              |
+ Libre Jellyfin 400          |█████████████████████████████████▋                | 66% libre
+```
+
 # Gestión Remota desde DV0
 
 DV0 actúa como jumpbox para gestionar el cluster de forma remota. Desde DV0 se puede acceder a Kubernetes y LXD a través del túnel WireGuard.
