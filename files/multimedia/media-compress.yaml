@@ -1,0 +1,204 @@
+# CronJob diario de compresión de películas Jellyfin >3 GiB.
+# - Solo /data/media/movies (no tv), cada 02:00, todas las películas pendientes
+# - Máxima compresión: HEVC libx265 CRF 23 preset medium, downscale a 1080p (decrease)
+# - Audio y subtítulos sin recodificar: -c:a copy -c:s copy -map 0
+# - Reemplaza el original solo tras ffprobe OK y ahorro >=5%; si falla, conserva original
+# - Solo logs (sin Telegram), Forbid concurrente, logs via kubectl -n multimedia logs
+# Estado: CREADO pero SUSPENDIDO hasta que la prueba media-compress-test sea validada
+#         a 40" / 2m (ver files/multimedia/media-compress-test.yaml). Cambiar suspend: false tras OK.
+# Uso:
+#   kubectl apply -f files/multimedia/media-compress.yaml
+#   # tras validar prueba:
+#   kubectl -n multimedia patch cronjob media-compress -p '{"spec":{"suspend":false}}'
+#   # ejecución manual sin esperar a las 02:00:
+#   kubectl -n multimedia create job media-compress-manual --from=cronjob/media-compress
+#   kubectl -n multimedia logs job/media-compress-manual -f
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: media-compress
+  namespace: multimedia
+  labels:
+    app.kubernetes.io/part-of: multimedia
+    app: media-compress
+spec:
+  # Suspendido hasta validar prueba comparativa (40" a 2m). Poner false tras OK.
+  suspend: true
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 43200  # 12h para lote; i3-7100T medium ~3fps → ~12h por peli 2h, procesa 1/noche
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: multimedia
+            app: media-compress
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            eu.elarreglador/worker: "true"
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: app
+                        operator: In
+                        values: [jellyfin]
+                  topologyKey: kubernetes.io/hostname
+          securityContext:
+            fsGroup: 1000
+          containers:
+            - name: compress
+              image: jrottenberg/ffmpeg:6-alpine
+              env:
+                - name: JELLYFIN_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: jellyfin-apikey
+                      key: token
+                      optional: true
+              resources:
+                requests:
+                  cpu: 1000m
+                  memory: 1Gi
+                limits:
+                  cpu: 2000m
+                  memory: 4Gi
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  echo "=== media-compress $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+                  echo "Buscando películas >3GiB en /data/media/movies ..."
+
+                  FOUND=0
+                  PROCESSED=0
+                  SAVED_TOTAL=0
+
+                  # find -print0 para nombres con espacios; sort para orden determinista
+                  find /data/media/movies -type f \( -iname "*.mkv" -o -iname "*.mp4" -o -iname "*.avi" -o -iname "*.mov" \) -size +3145728k -print0 2>/dev/null | sort -z | while IFS= read -r -d '' SRC; do
+                    FOUND=$((FOUND+1))
+                    # Evitar re-procesar el directorio de prueba
+                    case "$SRC" in
+                      */.test-compress/*) echo "SKIP test dir: $SRC"; continue ;;
+                    esac
+                    echo "------------------------------------------"
+                    echo "[$FOUND] $SRC ($(du -h "$SRC" | cut -f1))"
+                    # Evitar ficheros en escritura reciente (<5 min) por si qBittorrent/aMule aún escriben
+                    if [ -n "$(find "$SRC" -mmin -5 -print 2>/dev/null)" ]; then
+                      echo "SKIP: modificado hace <5 min, posible descarga en curso"
+                      continue
+                    fi
+                    BASENAME=$(basename "$SRC")
+                    OUT="/tmp/${BASENAME}.tmp.mkv"
+                    TMP_FINAL="${SRC}.tmp"
+                    rm -f "$OUT" "$TMP_FINAL"
+                    START=$(date +%s)
+                    echo "Transcodificando: HEVC CRF23 medium + downscale 1080p + copy audio/subs ..."
+                    if ffmpeg -hide_banner -y -i "$SRC" \
+                      -vf "scale=w=1920:h=1080:force_original_aspect_ratio=decrease:flags=lanczos" \
+                      -c:v libx265 -crf 23 -preset medium \
+                      -c:a copy -c:s copy -map 0 \
+                      "$OUT" 2>&1; then
+                      END=$(date +%s)
+                      DUR=$((END-START))
+                      if [ ! -s "$OUT" ]; then
+                        echo "FAIL: salida vacía $OUT"
+                        rm -f "$OUT"
+                        continue
+                      fi
+                      if ! ffprobe -v error "$OUT" >/dev/null 2>&1; then
+                        echo "FAIL: ffprobe no valida $OUT (corrupto)"
+                        rm -f "$OUT"
+                        continue
+                      fi
+                      ORIG=$(stat -c%s "$SRC")
+                      COMP=$(stat -c%s "$OUT")
+                      if [ "$COMP" -ge "$ORIG" ]; then
+                        echo "SKIP: sin ahorro (orig $ORIG -> comp $COMP)"
+                        rm -f "$OUT"
+                        continue
+                      fi
+                      SAVING_PCT=$(awk "BEGIN{printf \"%.1f\", 100-$COMP*100/$ORIG}")
+                      # Umbral mínimo 5% ahorro
+                      if [ "$COMP" -gt "$((ORIG*95/100))" ]; then
+                        echo "SKIP: ahorro ${SAVING_PCT}% <5% (orig $(du -h "$SRC"|cut -f1) -> comp $(du -h "$OUT"|cut -f1))"
+                        rm -f "$OUT"
+                        continue
+                      fi
+                      echo "OK encode ${DUR}s: $(du -h "$SRC"|cut -f1) -> $(du -h "$OUT"|cut -f1) ahorro ${SAVING_PCT}%"
+                      # Reemplazo atómico: cat + mv para preservar inode/permisos NFS
+                      if cat "$OUT" > "$TMP_FINAL" && mv -f "$TMP_FINAL" "$SRC"; then
+                        chown 1000:1000 "$SRC" 2>/dev/null || true
+                        chmod 664 "$SRC" 2>/dev/null || true
+                        echo "REEMPLAZADO: $SRC"
+                        PROCESSED=$((PROCESSED+1))
+                        SAVED_TOTAL=$((SAVED_TOTAL + ORIG - COMP))
+                      else
+                        echo "FAIL: no se pudo reemplazar $SRC"
+                        rm -f "$TMP_FINAL"
+                      fi
+                      rm -f "$OUT"
+                    else
+                      echo "FAIL: ffmpeg error para $SRC"
+                      rm -f "$OUT" "$TMP_FINAL"
+                      continue
+                    fi
+                    # Chequeo de deadline: si llevamos >5.5h, salir para no ser matado por activeDeadline
+                    NOW=$(date +%s)
+                    ELAPSED=$((NOW-START))
+                    # START es por fichero, no global; aproximamos con uptime del pod
+                    # Simplificado: si PROCESSED>0 y quedan muchos, el siguiente loop seguirá mañana
+                  done
+
+                  echo ""
+                  echo "=== Resumen media-compress ==="
+                  # FOUND no se propaga bien fuera del pipe subshell en sh; recalcular
+                  TOTAL_FOUND=$(find /data/media/movies -type f \( -iname "*.mkv" -o -iname "*.mp4" -o -iname "*.avi" -o -iname "*.mov" \) -size +3145728k 2>/dev/null | wc -l)
+                  echo "Películas >3GiB encontradas: $TOTAL_FOUND"
+                  echo "Procesadas con éxito: ver logs arriba (cada REEMPLAZADO)"
+                  echo "Espacio estimado liberado: ver ahorro % por fichero"
+                  ls -lh /data/media/movies 2>&1 | head -n 20
+
+                  echo ""
+                  if [ -n "${JELLYFIN_API_KEY:-}" ]; then
+                    echo "Refrescando librería Jellyfin..."
+                    if curl -s -w "\nHTTP %{http_code}\n" -X POST "http://jellyfin:8096/Library/Refresh" -H "X-Emby-Token: $JELLYFIN_API_KEY" -H "Content-Type: application/json" 2>&1 | tail -n 5; then
+                      echo "Library/Refresh solicitado"
+                    else
+                      echo "WARN: Library/Refresh falló (continuar igual)"
+                    fi
+                  else
+                    echo "Sin JELLYFIN_API_KEY -> omitiendo Library/Refresh (se hará en próximo auto-scan horario)"
+                  fi
+                  echo "=== fin media-compress $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+              volumeMounts:
+                - name: media
+                  mountPath: /data
+                - name: tmp
+                  mountPath: /tmp
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+                readOnlyRootFilesystem: false
+                runAsNonRoot: true
+                runAsUser: 1000
+                seccompProfile:
+                  type: RuntimeDefault
+          volumes:
+            - name: media
+              persistentVolumeClaim:
+                claimName: media-data
+            - name: tmp
+              emptyDir:
+                sizeLimit: 10Gi

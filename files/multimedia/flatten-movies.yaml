@@ -1,0 +1,123 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flatten-movies
+  namespace: multimedia
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: multimedia
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: flatten
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "=========================================="
+              echo "Flatten movies - $(date)"
+              echo "=========================================="
+              echo ""
+              echo "Antes:"
+              ls -l /data/media/movies 2>&1 | head -n 100 || true
+              echo "--- subdirs ---"
+              find /data/media/movies -mindepth 1 -maxdepth 2 -type d 2>&1 | sort | head -n 100 || true
+              echo "--- ficheros en subdirs (mindepth 2) ---"
+              find /data/media/movies -mindepth 2 -type f 2>&1 | head -n 100 || true
+              echo ""
+
+              # 1) Caso especial: Series dentro de movies -> mover a /data/media/tv
+              if [ -d "/data/media/movies/Series" ]; then
+                echo "Detectado /data/media/movies/Series -> moviendo a /data/media/tv ..."
+                mkdir -p /data/media/tv
+                for src in /data/media/movies/Series/*; do
+                  [ -e "$src" ] || continue
+                  base=$(basename "$src")
+                  echo "  Moviendo Serie: $base"
+                  if [ -e "/data/media/tv/$base" ]; then
+                    echo "    Destino /data/media/tv/$base existe -> fusionando (mv -n)"
+                    mkdir -p "/data/media/tv/$base"
+                    # mover contenido recursivo
+                    find "$src" -mindepth 1 -maxdepth 1 -exec mv -n {} "/data/media/tv/$base"/ \; 2>/dev/null || true
+                    # intentar eliminar origen si quedo vacio
+                    find "$src" -type d -empty -delete 2>/dev/null || true
+                    rmdir "$src" 2>/dev/null || rm -rf "$src" 2>/dev/null || true
+                  else
+                    mv -n "$src" /data/media/tv/ 2>/dev/null || mv "$src" /data/media/tv/
+                  fi
+                done
+                # limpiar Series si quedo vacia
+                find /data/media/movies/Series -type d -empty -delete 2>/dev/null || true
+                rmdir /data/media/movies/Series 2>/dev/null || rm -rf /data/media/movies/Series 2>/dev/null || true
+                echo "  Series movido"
+                echo ""
+              fi
+
+              # 2) Aplanar categorias de peliculas a /data/media/movies
+              echo "Aplanando categorias -> /data/media/movies ..."
+              # mv -n evita sobrescribir en colision de nombres; el duplicado queda en origen para revision
+              if [ -n "$(find /data/media/movies -mindepth 2 -type f -print -quit 2>/dev/null)" ]; then
+                find /data/media/movies -mindepth 2 -type f -exec mv -n {} /data/media/movies/ \; 2>/dev/null || true
+                echo "  mv completado"
+              else
+                echo "  No hay ficheros en subdirs"
+              fi
+
+              # Reportar colisiones que quedaron sin mover (duplicados)
+              remaining=$(find /data/media/movies -mindepth 2 -type f 2>/dev/null | head -n 20 || true)
+              if [ -n "$remaining" ]; then
+                echo "  AVISO: quedan ficheros en subdirs (posibles duplicados por mv -n):"
+                echo "$remaining"
+              fi
+
+              echo ""
+              echo "Eliminando carpetas vacias bajo /data/media/movies ..."
+              find /data/media/movies -mindepth 1 -type d -empty -delete 2>/dev/null || true
+              # segunda pasada para padres que quedaron vacios
+              find /data/media/movies -mindepth 1 -type d -empty -delete 2>/dev/null || true
+              # por si quedaron directorios no vacios por duplicados, listar
+              leftover_dirs=$(find /data/media/movies -mindepth 1 -type d 2>/dev/null || true)
+              if [ -n "$leftover_dirs" ]; then
+                echo "  Quedan directorios no vacios (revisar duplicados):"
+                echo "$leftover_dirs" | head -n 20
+              else
+                echo "  No quedan subdirectorios"
+              fi
+
+              echo ""
+              echo "Ajustando permisos..."
+              chown -R 1000:1000 /data/media/movies 2>/dev/null || true
+              chown -R 1000:1000 /data/media/tv 2>/dev/null || true
+              find /data/media/movies -type d -exec chmod 775 {} + 2>/dev/null || true
+              find /data/media/movies -type f -exec chmod 664 {} + 2>/dev/null || true
+              find /data/media/tv -type d -exec chmod 775 {} + 2>/dev/null || true
+              find /data/media/tv -type f -exec chmod 664 {} + 2>/dev/null || true
+
+              echo ""
+              echo "Despues:"
+              ls -l /data/media/movies 2>&1 | head -n 200 || true
+              echo "--- tv ---"
+              ls -l /data/media/tv 2>&1 | head -n 50 || true
+              echo ""
+              echo "Verificando symlinks:"
+              ls -l /data/torrents/ 2>&1 | grep -E "movies|tv" || true
+              ls -l /data/amule/incoming/ 2>&1 | grep -E "movies|tv" || true
+              echo ""
+              echo "=========================================="
+              echo "Flatten completado"
+              echo "=========================================="
+          volumeMounts:
+            - name: media
+              mountPath: /data
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: media-data

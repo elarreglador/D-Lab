@@ -1,0 +1,181 @@
+# Job de prueba comparativa para compresión de películas Jellyfin.
+# Fase 1 del plan: genera 2 variantes HEVC de UNA película >3 GiB sin tocar el original.
+# - Mantiene el original intacto en /data/media/movies/
+# - Crea /data/media/movies/.test-compress/<nombre>_crf22-medium.mkv y _crf23-medium.mkv
+# - Downscale a 1080p solo si altura >1080 (force_original_aspect_ratio=decrease)
+# - Audio y subtítulos sin recodificar: -c:a copy -c:s copy -map 0
+# - Criterio 40" a 2m: CRF 22 medium (calidad máx) vs CRF 23 medium (máxima compresión) — slow descartado por 1.5fps
+# Uso:
+#   # Automático: toma la primera película >3GiB
+#   kubectl apply -f files/multimedia/media-compress-test.yaml
+#   kubectl -n multimedia wait --for=condition=complete job/media-compress-test --timeout=8h
+#   kubectl -n multimedia logs job/media-compress-test -f
+#   # Con película concreta (override):
+#   kubectl -n multimedia create job media-compress-test-manual --from=cronjob/media-compress-test  # no aplica, es Job
+#   # o editar env TARGET_FILE=/data/media/movies/Nombre.mkv y reaplicar
+# Requisitos: PVC media-data RWX nfs-storage-v4 (VIP 192.168.1.30), imagen jrottenberg/ffmpeg:6-alpine
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: media-compress-test
+  namespace: multimedia
+  labels:
+    app.kubernetes.io/part-of: multimedia
+    app: media-compress-test
+spec:
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 0
+  activeDeadlineSeconds: 86400  # 24h para 2 encodes; i3-7100T 2c/4t: slow ~1.5fps → ~30h, medium ~3-4fps → ~12h
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: multimedia
+        app: media-compress-test
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        eu.elarreglador/worker: "true"
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values: [jellyfin]
+              topologyKey: kubernetes.io/hostname
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: compress-test
+          image: jrottenberg/ffmpeg:6-alpine
+          # Película fijada para prueba: Akira 1080p H.264 3.0G (representativa, encode rápido ~2h/variante)
+          # Si quiere probar otra, cambie value y reaplique (p.ej. Batman.Begins 5.9G para stress test)
+          env:
+            - name: TARGET_FILE
+              value: "/data/media/movies/Akira.Edicion.30.Aniversario.(Spanish.Japanese.Subs).HD.1080p.x264-AC3.by.Geot.mkv"
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "=== media-compress-test $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+              echo "Buscando películas >3GiB en /data/media/movies ..."
+
+              # Selección de fichero objetivo
+              if [ -n "$TARGET_FILE" ] && [ -f "$TARGET_FILE" ]; then
+                SRC="$TARGET_FILE"
+                echo "TARGET_FILE fijado: $SRC"
+              else
+                # Primera película >3GiB (3145728k = 3*1024*1024 k)
+                SRC=$(find /data/media/movies -type f \( -iname "*.mkv" -o -iname "*.mp4" -o -iname "*.avi" -o -iname "*.mov" \) -size +3145728k -print -quit 2>/dev/null || true)
+                if [ -z "$SRC" ]; then
+                  echo "ERROR: no se encontró ninguna película >3GiB en /data/media/movies"
+                  echo "Listado movies:"
+                  ls -lh /data/media/movies 2>&1 | head -n 50
+                  echo "Búsqueda amplia (+1GiB):"
+                  find /data/media/movies -type f -size +1048576k -exec ls -lh {} \; 2>&1 | head -n 20
+                  exit 1
+                fi
+                echo "Auto-seleccionada: $SRC"
+              fi
+
+              ls -lh "$SRC"
+              ffprobe -hide_banner -i "$SRC" 2>&1 | head -n 30 || true
+              echo ""
+
+              OUTDIR="/data/media/movies/.test-compress"
+              mkdir -p "$OUTDIR"
+              BASENAME=$(basename "$SRC")
+              STEM="${BASENAME%.*}"
+
+              # Función encode
+              encode() {
+                CRF=$1
+                PRESET=$2
+                SUFFIX=$3
+                OUT="$OUTDIR/${STEM}_${SUFFIX}.mkv"
+                echo "------------------------------------------"
+                echo "Encode $SUFFIX: crf=$CRF preset=$PRESET -> $OUT"
+                echo "------------------------------------------"
+                rm -f "$OUT"
+                START=$(date +%s)
+                # Downscale a 1080p solo si necesario; lanczos para máxima calidad
+                if ffmpeg -hide_banner -y -i "$SRC" \
+                  -vf "scale=w=1920:h=1080:force_original_aspect_ratio=decrease:flags=lanczos" \
+                  -c:v libx265 -crf "$CRF" -preset "$PRESET" \
+                  -c:a copy -c:s copy -map 0 \
+                  "$OUT" 2>&1; then
+                  END=$(date +%s)
+                  DUR=$((END-START))
+                  echo "Encode $SUFFIX completado en ${DUR}s"
+                  if ffprobe -v error "$OUT" >/dev/null 2>&1; then
+                    ORIG=$(stat -c%s "$SRC")
+                    COMP=$(stat -c%s "$OUT")
+                    SAVING=$(awk "BEGIN{printf \"%.1f\", 100-$COMP*100/$ORIG}")
+                    echo "ORIG: $(du -h "$SRC" | cut -f1) ($ORIG bytes)"
+                    echo "COMP $SUFFIX: $(du -h "$OUT" | cut -f1) ($COMP bytes) -> ahorro ${SAVING}%"
+                    ls -lh "$OUT"
+                    ffprobe -hide_banner -i "$OUT" 2>&1 | head -n 20 || true
+                  else
+                    echo "ERROR: ffprobe falló para $OUT (fichero corrupto)"
+                    rm -f "$OUT"
+                    return 1
+                  fi
+                else
+                  echo "ERROR: ffmpeg falló para $SUFFIX"
+                  rm -f "$OUT"
+                  return 1
+                fi
+                echo ""
+              }
+
+              # Dos variantes: B1 CRF22 medium vs B2 CRF23 medium (slow descartado: 1.5fps → ~33h, excede deadline 8h)
+              # Ambas usan medium para comparar CRF a igual velocidad; B2 es máxima compresión pedida
+              encode 22 medium "crf22-medium"
+              encode 23 medium "crf23-medium"
+
+              echo "=== Resumen ==="
+              echo "Original: $SRC ($(du -h "$SRC" | cut -f1))"
+              ls -lh "$OUTDIR/${STEM}_"* 2>&1
+              echo ""
+              echo "Comparativa lista en: $OUTDIR"
+              echo "Original intacto: $SRC"
+              echo ""
+              echo "Próximos pasos (visionado 40\" a 2m):"
+              echo "  1. En Jellyfin, Library/Refresh si quiere indexar .test-compress (opcional):"
+              echo "     kubectl -n multimedia create job jellyfin-scan-now --from=cronjob/jellyfin-auto-scan"
+              echo "  2. Reproducir original vs ${STEM}_crf22-medium.mkv vs ${STEM}_crf23-medium.mkv en TV 40\" a 2m"
+              echo "  3. Si CRF23-medium es indistinguible -> elegir CRF23 medium para CronJob (máxima compresión)"
+              echo "     Si se nota pérdida -> elegir CRF22 medium"
+              echo "  4. Borrar .test-compress tras decisión: rm -rf $OUTDIR"
+              echo "=== fin media-compress-test ==="
+          volumeMounts:
+            - name: media
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: media-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 5Gi
