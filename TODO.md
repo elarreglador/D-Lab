@@ -2,6 +2,7 @@
 
 ## Features
 
+- [ ] Compresión movies >3GiB con mínima pérdida (Fase 1 prueba + Fase 2 CronJob 02:00): `files/multimedia/media-compress-test.yaml` (Job 8h, HEVC crf22 slow vs crf23 medium, downscale 1080p, audio/subs copy, mantiene original en `.test-compress/`, visionado 40" a 2m) + `files/multimedia/media-compress.yaml` (CronJob `0 2 * * *` Forbid `suspend:true` hasta OK, libx265 crf23 medium, todas movies >3GiB, reemplaza original si ahorro >=5% y ffprobe OK, logs solo, 6h deadline). Desplegar prueba: `kubectl apply -f media-compress-test.yaml` + `wait/logs` + visionado A/B; tras OK: `kubectl patch cronjob media-compress -p '{"spec":{"suspend":false}}'`
 - [ ] Simplificación multimedia a Jellyfin+qBittorrent+aMule (2026-08-29): retirados Sonarr/Radarr/Prowlarr/FlareSolverr/Jellyseerr/es-badge; añadidos `amule.yaml` (ngosang/amule, 4711+4662/4672/4665), `ingress/certificate-{qbittorrent,amule}.yaml` (`torrent.elarreglador.eu`/`amule.elarreglador.eu` con TLS), `networkpolicy-multimedia.yaml`, `storage.yaml` podado (solo `qbittorrent/jellyfin/amule-config`), `init-media-dirs` con `/data/amule`, `amule-expose-p2p.sh`; liberadas IPs .56/.57. Pendiente: exponer P2P en DV0 y probar login/WebUI + ingest en Jellyfin
 - [x] Landing: sección «Acerca de ti» (live-fingerprinting del visitante) — `files/landing/acerca-de-ti.{js,css}`
 - [x] Landing: rediseño ciberpunk/retrofuturista (paleta cian/magenta/marino/negro, tipografías auto-alojadas Orbitron/Exo 2/Share Tech Mono, rejilla + scanlines + glow) — `styles.css`, fuentes `.woff2` en `files/landing/`
@@ -27,6 +28,10 @@
 - [x] `signals.hw.netType.value` → `signals['hw.netType'].value` (acceso por clave punteada a un mapa de ids planos)
 - [x] `recall()` colgada si un almacén (IndexedDB/Cache) no responde → guarda `Promise.race` con respaldo de primera visita
 - [x] Versión de navegador limpia (sin client hints ruidosos "Not=A?Brand...")
+
+## Tareas finalizadas — Monitorización CPU/iowait D2 (2026-09-08)
+
+- [x] Grafana CPU 100% falso en D2 por iowait (verificado 2026-09-08, `incidentes/grafana-cpu-iowait-20260908.md`): dashboard `files/monitoring/grafana-dashboard-sistema-dlab.yaml` 7 tarjetas `stat` `CPU 100 - avg(rate(idle))*100` contaba `iowait` como ocupado → D2 `100%` con `load 12` `pressure some 99%` `wa 89%` pero `sda %util 0.8%`. Causa: `folio_wait_writeback` → `nfs_getattr` bloqueado 122s en `du/ls` sobre `/data/media/movies` (PVC `media-data` via `VIP 192.168.1.30` Gluster replica HDD `fsync ~66ms`, `Committed_AS 10.3G > CommitLimit 7.9G`, ambos bricks `97%`). Corrección A2: `CPU 100 - (avg(rate(idle))+avg(rate(iowait)))*100` + serie `iowait avg(rate(iowait))*100` (3 series `CPU`/`iowait`/`RAM` por tarjeta), verificado D2 `17.8%`/`82.1%` vs `100%` anterior, D1 `39.6%`/`1.9%`. Aplicado `kubectl apply --server-side` y sidecar `reload 200`. Documentado en `03-Aplicaciones.md` y `README-TECH.md`.
 
 ## Tareas finalizadas — Monitorización almacenamiento (2026-08-31)
 

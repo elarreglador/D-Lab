@@ -532,7 +532,7 @@ Ejecutar todos los pasos en `k8s-master-1` y `k8s-worker-1`.
   sudo apt-get install -y apt-transport-https ca-certificates curl gpg
   ```
 
-- [x] Añadir repositorio oficial de Kubernetes (v1.36)
+- [x] Añadir repositorio oficial de Kubernetes (v1.36, `verificado 2026-08-10`: `kubernetesVersion: v1.36.2` en `kubeadm-config.yaml:591`)
   ```bash
   curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key |
     sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
@@ -1026,7 +1026,7 @@ Pod (en k8s-worker-1, D1)
 
 - Un pod que corre en **D1** escribe su copia principal en `/dev/sda1` (HDD 465,8G, ext4, montado en `/mnt/data`) de **k8s-worker-1**, que es un container LXC del host D1. Es decir, los datos persistentes de un pod en D1 viven **físicamente en D1**.
 - GlusterFS replica 2 mantiene una segunda copia en el brick de D2: si D1 cae, los datos sobreviven en D2.
-- El pod **no** escribe directo al disco local: aunque el brick esté en la misma máquina, el flujo pasa por la red (`192.168.1.30:2049`). Para el pod el volumen es un NFS transparente. El StorageClass por defecto `nfs-storage` monta con **NFSv3** (`nfsvers=3`); existe `nfs-storage-v4` para apps que necesitan **locks de archivo** (ver fila NLM/NFSv3 en incidencias).
+- El pod **no** escribe directo al disco local: aunque el brick esté en la misma máquina, el flujo pasa por la red (`192.168.1.30:2049`). Para el pod el volumen es un NFS transparente. El StorageClass por defecto `nfs-storage` monta con **NFSv3** (`nfsvers=3`); existe `nfs-storage-v4` para apps que necesitan **locks de archivo** (ver fila NLM/NFSv3 en incidencias). Matriz vigente `verificado 2026-09-06`: `nfs-storage-v4` → `media-data` (RWX, locks), `qbittorrent-config`/`amule-config`/`mariadb-data` (RWO, locks/móviles); `nfs-storage` → `nodered-data`/`ollama-models`/`docs-cache` (RWO, sin locks); `local-static` → `jellyfin-config-local` (SQLite `fsync ~66 ms`, ver `incidentes/jellyfin-lentitud-20260906.md`).
 
 **Migración entre nodos.** Un pod con PVC `nfs-storage` puede ser re-schedulado de D1 a D2 **conservando los datos**: el PV no tiene `nodeAffinity` y el StorageClass no fija nodo. Al relanzarse en D2, Kubernetes monta el mismo PVC (que GlusterFS replica en ambos workers) y el pod lee lo que escribió en D1. Verificado con el test de migración de la [Fase 9](#fase-9--despliegues-de-prueba).
 
@@ -1272,6 +1272,7 @@ Un cluster expuesto sin controles de acceso es vulnerable. RBAC restringe qué p
   - **Implementación (2026-08-01)**:
     - Calico instalado con `policy.type=k8s`: las NetworkPolicies se aplican desde el arranque del CNI. `calico-node` corre en los 4 nodos (DaemonSet 4/4).
     - **Fix RBAC del manifest upstream**: el ClusterRole `calico-cni-plugin` de v3.32.1 no incluye `get clusterinformations`, con lo que el plugin CNI falla al crear sandboxes (`FailedCreatePodSandBox`). Se añadió la regla (ya incorporada en `files/calico-policy-only.yaml`).
+    - **Gotcha token CNI** (`verificado 2026-09-06`): el `kubeconfig` del plugin CNI (`/etc/cni/net.d/calico-kubeconfig` en los 4 nodos) usa un `token` de `ServiceAccount` — el Bound token caducó el 2026-08-02 (`Unauthorized` en `FailedCreatePodSandBox`). Mitigación: Secret legacy `calico-cni-plugin-token` (kube-system) **sin `exp`/`iat`** (verificado 2026-09-06 `kubectl get secret -o jsonpath='{.data.token}' | base64 -d` y `cat /etc/cni/net.d/calico-kubeconfig | grep token` en 4 nodos); segunda rotación 2026-08-29 por reinstalación. Ver `03-Aplicaciones.md#notas-operativas` para procedimiento.
     - **Validación de enforcement**: prueba con 3 pods en un namespace aislado — con una policy "solo beta accede a alpha", `gamma → alpha` quedó bloqueado y `beta → alpha` conectó.
   - **Políticas de producción** (manifiestos en `files/networkpolicies/`):
     - `landing-allow-ingress-nginx` (default, `app=landing`): ingress solo desde pods `ingress-nginx` (puerto 80) + egress solo a DNS (kube-dns 53/tcp+udp). Verificado: `https://elarreglador.eu/` → 200; un pod ajeno no alcanza landing ni por PodIP ni por ClusterIP.
@@ -1787,14 +1788,14 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
   - Verificado: HTTPS 200 en `elarreglador.eu`/`www.*` sin credenciales, `test.*` → 404, HTTP → HTTPS, SANs correctos
   - Detalle en [README-TECH.md#fase-11--nginx-ingress-controller](./README-TECH.md#fase-11--nginx-ingress-controller)
 
-- [x] **Fase 12: Monitoreo y Observabilidad** (ampliada 2026-08-31 a 11 paneles):
+- [x] **Fase 12: Monitoreo y Observabilidad** (ampliada 2026-09-08 a 11 paneles — corrección CPU/iowait):
   - kube-prometheus-stack (helm): Prometheus, Grafana, AlertManager, prometheus-operator, kube-state-metrics, node-exporter DaemonSet — namespace `monitoring`
   - Almacenamiento efímero para Prometheus/Grafana (TSDB sobre NFS no fiable; se perdió tiempo en ello)
   - Recursos ajustados: Grafana 512Mi/200Mi (evita OOM), Prometheus 2Gi/600Mi
   - node-exporter nativo en D1/D2 (`apt`) + Service/Endpoints/ServiceMonitor `host-node` — D1 scrapeado vía relay socat en D2 (:19100) por limitación macvlan container↔host
   - `resolv.conf` estático en D1/D2 (systemd-resolved roto bloqueaba apt)
   - Grafana público en `https://grafana.elarreglador.eu` con login propio de Grafana (sin basic-auth web ni anonymous; excepción a la clave única de acceso web) y Certificate Let's Encrypt dedicado en `monitoring`
-  - Dashboard «Sistema D-Lab» 11 paneles (verificado 2026-08-31): 7 CPU/RAM `stat` `thresholds 60/85` + 4 almacenamiento `bargauge 75/90 h:3 w:12` + `Tráfico PVC agregado h:7 w:12` + `sda worker-1/2 h:5 w:12` matriz `2×2 w12 y:15→25` `refresh 1m` `now-24h` `binBps`/`percent` `palette-classic`
+  - Dashboard «Sistema D-Lab» 11 paneles (verificado 2026-09-08): 7 CPU/iowait/RAM `stat` `thresholds 60/85` + 4 almacenamiento `bargauge 75/90 h:3 w:12` + `Tráfico PVC agregado h:7 w:12` + `sda worker-1/2 h:5 w:12` matriz `2×2 w12 y:15→25` `refresh 1m` `now-24h` `binBps`/`percent` `palette-classic` — PromQL CPU corregida `100 - (avg(rate(idle))+avg(rate(iowait)))*100` + `iowait` `avg(rate(iowait))*100` (verificado D2 17.8%/82.1% vs 100% anterior, incidente `incidentes/grafana-cpu-iowait-20260908.md`)
   - ServiceMonitor cert-manager + PrometheusRule `alertas-personalizadas` (HostDown, ClusterNodeNotReady, DiskPressureHost, CertificateExpiring)
   - AlertManager sin receiver (alertas solo UI)
   - Verificado: `node_filesystem_avail_bytes{mountpoint="/mnt/data"}` % `8.91%`, `sum(rate(node_disk_*…))` MiB/s, targets up, HTTPS 302 → /login → 200, public-dashboards 200 y landing `curl 200` iframe `1050px`
@@ -1839,9 +1840,9 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
 
 - [x] **Fase 14: Radio SDR remota (rtl_tcp)**:
   - Dongle RTL-SDR v3 (0bda:2838) + Ham It Up en D1 → device `usb` LXD → k8s-worker-1
-  - Pod `rtl-sdr` (imagen `skl256/rtl_tcp`, privilegiado, `hostPath /dev/bus/usb`, anclado a k8s-worker-1 con `nodeSelector` `eu.elarreglador/sdr=true`) + Service NodePort `rtl-sdr` 1234:31234 + NetworkPolicy `rtlsdr-allow`
-  - Cadena pública: GQRX → `sdr.elarreglador.eu:1234` → nginx stream DV0 → LXC proxy `proxyrtlsdr` en D1 (10.8.0.11:1234) → NodePort 31234 → pod
-  - Un cliente a la vez (rtl_tcp); compensación upconverter por cliente (LNB LO = −125 MHz); parámetros GQRX publicados en la landing y en 03-Aplicaciones.md
+  - Pod `rtl-sdr` (imagen `skl256/rtl_tcp`, privilegiado, `hostPath /dev/bus/usb`, anclado a k8s-worker-1 con `nodeSelector` `eu.elarreglador/sdr=true`) + Service `LoadBalancer 192.168.1.60:1234` + `NodePort 1234:31234` conservado (`files/sdr/sdr.yaml:73`) + NetworkPolicy `rtlsdr-allow`
+  - Cadena pública: GQRX (`Input rate 960000 ~15.4 Mbps`, defecto `2400000 ~38.4 Mbps` satura DV0) → `sdr.elarreglador.eu:1234` → nginx stream DV0 → LXC proxy `proxyrtlsdr` en D1 (10.8.0.11:1234) → NodePort 31234 → pod
+  - Un cliente a la vez (rtl_tcp); compensación upconverter por cliente (LNB LO = −125 MHz); parámetros GQRX publicados en la landing (`files/landing/index.html:140` `960000`) y en 03-Aplicaciones.md
   - Verificado (2026-08-14): pod Running en k8s-worker-1; cabecera DongleInfo (magic `RTL0`) recibida en `10.8.0.11:1234` desde D1/​DV0 y en el extremo público `sdr.elarreglador.eu:1234` tras aplicar el bloque `stream` en DV0
   - Detalle en [03-Aplicaciones.md#radio-sdr-remota-rtl_tcp](./03-Aplicaciones.md#radio-sdr-remota-rtl_tcp) y [01-Network.md#radio-sdr-remota-rtl_tcp--lxc-proxy-device](./01-Network.md#radio-sdr-remota-rtl_tcp--lxc-proxy-device)
 

@@ -59,7 +59,7 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
-              "expr": "100 - avg by (host) (rate(node_cpu_seconds_total{job=\"dv0-host\", host=\"dv0\", mode=\"idle\"}[5m])) * 100",
+              "expr": "100 - (avg by (host) (rate(node_cpu_seconds_total{job=\"dv0-host\", host=\"dv0\", mode=\"idle\"}[5m])) + avg by (host) (rate(node_cpu_seconds_total{job=\"dv0-host\", host=\"dv0\", mode=\"iowait\"}[5m]))) * 100",
               "legendFormat": "CPU",
               "range": true,
               "refId": "A"
@@ -67,10 +67,18 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
+              "expr": "avg by (host) (rate(node_cpu_seconds_total{job=\"dv0-host\", host=\"dv0\", mode=\"iowait\"}[5m])) * 100",
+              "legendFormat": "iowait",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
               "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"dv0-host\", host=\"dv0\"} / node_memory_MemTotal_bytes{job=\"dv0-host\", host=\"dv0\"})",
               "legendFormat": "RAM",
               "range": true,
-              "refId": "B"
+              "refId": "C"
             }
           ],
           "title": "DV0 · Host",
@@ -112,7 +120,7 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
-              "expr": "100 - avg by (host) (rate(node_cpu_seconds_total{job=\"host-node\", host=\"d1\", mode=\"idle\"}[5m])) * 100",
+              "expr": "100 - (avg by (host) (rate(node_cpu_seconds_total{job=\"host-node\", host=\"d1\", mode=\"idle\"}[5m])) + avg by (host) (rate(node_cpu_seconds_total{job=\"host-node\", host=\"d1\", mode=\"iowait\"}[5m]))) * 100",
               "legendFormat": "CPU",
               "range": true,
               "refId": "A"
@@ -120,10 +128,18 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
+              "expr": "avg by (host) (rate(node_cpu_seconds_total{job=\"host-node\", host=\"d1\", mode=\"iowait\"}[5m])) * 100",
+              "legendFormat": "iowait",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
               "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"host-node\", host=\"d1\"} / node_memory_MemTotal_bytes{job=\"host-node\", host=\"d1\"})",
               "legendFormat": "RAM",
               "range": true,
-              "refId": "B"
+              "refId": "C"
             }
           ],
           "title": "D1 · Host",
@@ -165,7 +181,7 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
-              "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.21:9100\", mode=\"idle\"}[5m])) * 100",
+              "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.21:9100\", mode=\"idle\"}[5m])) + avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.21:9100\", mode=\"iowait\"}[5m]))) * 100",
               "legendFormat": "CPU",
               "range": true,
               "refId": "A"
@@ -173,10 +189,18 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
+              "expr": "avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.21:9100\", mode=\"iowait\"}[5m])) * 100",
+              "legendFormat": "iowait",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
               "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance=\"192.168.1.21:9100\"} / node_memory_MemTotal_bytes{instance=\"192.168.1.21:9100\"})",
               "legendFormat": "RAM",
               "range": true,
-              "refId": "B"
+              "refId": "C"
             }
           ],
           "title": "D1 · k8s-master-1",
@@ -218,7 +242,7 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
-              "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.31:9100\", mode=\"idle\"}[5m])) * 100",
+              "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.31:9100\", mode=\"idle\"}[5m])) + avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.31:9100\", mode=\"iowait\"}[5m]))) * 100",
               "legendFormat": "CPU",
               "range": true,
               "refId": "A"
@@ -226,10 +250,18 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
+              "expr": "avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.31:9100\", mode=\"iowait\"}[5m])) * 100",
+              "legendFormat": "iowait",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
               "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance=\"192.168.1.31:9100\"} / node_memory_MemTotal_bytes{instance=\"192.168.1.31:9100\"})",
               "legendFormat": "RAM",
               "range": true,
-              "refId": "B"
+              "refId": "C"
             }
           ],
           "title": "D1 · k8s-worker-1",
@@ -271,7 +303,7 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
-              "expr": "100 - avg by (host) (rate(node_cpu_seconds_total{job=\"host-node\", host=\"d2\", mode=\"idle\"}[5m])) * 100",
+              "expr": "100 - (avg by (host) (rate(node_cpu_seconds_total{job=\"host-node\", host=\"d2\", mode=\"idle\"}[5m])) + avg by (host) (rate(node_cpu_seconds_total{job=\"host-node\", host=\"d2\", mode=\"iowait\"}[5m]))) * 100",
               "legendFormat": "CPU",
               "range": true,
               "refId": "A"
@@ -279,10 +311,18 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
+              "expr": "avg by (host) (rate(node_cpu_seconds_total{job=\"host-node\", host=\"d2\", mode=\"iowait\"}[5m])) * 100",
+              "legendFormat": "iowait",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
               "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"host-node\", host=\"d2\"} / node_memory_MemTotal_bytes{job=\"host-node\", host=\"d2\"})",
               "legendFormat": "RAM",
               "range": true,
-              "refId": "B"
+              "refId": "C"
             }
           ],
           "title": "D2 · Host",
@@ -324,7 +364,7 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
-              "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.22:9100\", mode=\"idle\"}[5m])) * 100",
+              "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.22:9100\", mode=\"idle\"}[5m])) + avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.22:9100\", mode=\"iowait\"}[5m]))) * 100",
               "legendFormat": "CPU",
               "range": true,
               "refId": "A"
@@ -332,10 +372,18 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
+              "expr": "avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.22:9100\", mode=\"iowait\"}[5m])) * 100",
+              "legendFormat": "iowait",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
               "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance=\"192.168.1.22:9100\"} / node_memory_MemTotal_bytes{instance=\"192.168.1.22:9100\"})",
               "legendFormat": "RAM",
               "range": true,
-              "refId": "B"
+              "refId": "C"
             }
           ],
           "title": "D2 · k8s-master-2",
@@ -377,7 +425,7 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
-              "expr": "100 - avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.32:9100\", mode=\"idle\"}[5m])) * 100",
+              "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.32:9100\", mode=\"idle\"}[5m])) + avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.32:9100\", mode=\"iowait\"}[5m]))) * 100",
               "legendFormat": "CPU",
               "range": true,
               "refId": "A"
@@ -385,10 +433,18 @@ data:
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "editorMode": "code",
+              "expr": "avg by (instance) (rate(node_cpu_seconds_total{instance=\"192.168.1.32:9100\", mode=\"iowait\"}[5m])) * 100",
+              "legendFormat": "iowait",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "editorMode": "code",
               "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance=\"192.168.1.32:9100\"} / node_memory_MemTotal_bytes{instance=\"192.168.1.32:9100\"})",
               "legendFormat": "RAM",
               "range": true,
-              "refId": "B"
+              "refId": "C"
             }
           ],
           "title": "D2 · k8s-worker-2",
