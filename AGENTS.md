@@ -48,5 +48,5 @@ Vault de documentación (Obsidian) + scripts de despliegue del laboratorio caser
 
 - Vault Obsidian: `.obsidian/` está gitignored; los enlaces internos markdown son válidos.
 - PDBs con `minAvailable: 1` sobre workloads de réplica única bloquean `kubectl drain`.
-- El token CNI de Calico (`calico-cni-plugin`) expira; si aparecen `FailedCreatePodSandBox`, revisar (ver notas de 03-Aplicaciones.md).
+- El token CNI de Calico (`calico-cni-plugin`, `/etc/cni/net.d/calico-kubeconfig`) expira en su forma original (BoundServiceAccountToken); el Secret legacy `calico-cni-plugin-token` es sin `exp` (verificado 2026-09-06: payload sin `exp`/`iat`); si aparecen `FailedCreatePodSandBox`, verificar que el kubeconfig aún contiene el token del Secret legacy y rotar si diverge (ver 03-Aplicaciones.md `verificado 2026-09-06`).
 - DV0 tiene 394 MiB de RAM: snapd es inestable; se usa el binario real de lxc en `~/.local/bin`.

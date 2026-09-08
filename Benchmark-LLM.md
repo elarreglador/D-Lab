@@ -4,14 +4,10 @@ Resultados de los benchmarks de generación de código realizados sobre el pod
 Ollama del namespace `ia` (cluster K8s D-Lab). Documento de resultados; la
 sección de la aplicación está en `03-Aplicaciones.md`.
 
-- **Fecha**: 2026-08-18 (ping) y 2026-08-19 (tarea de programación).
-- **Entorno**: pod `ollama/ollama:0.32.14`, 2 CPU / 4 GiB (límites), PVC
-  `ollama-models` 20Gi (NFS). La carga y generación se midieron sobre el pod
-  real, no sobre el host completo, para reflejar el uso real (opencode/Node-RED).
-- **Modelos probados** (6): `qwen2.5-coder:3b`, `granite-code:3b`,
-  `llama3.2:3b`, `yi-coder:1.5b`, `deepseek-coder:1.3b`, `smollm2:1.7b`.
-- **Estado de los modelos**: los 6 se conservan descargados en el PVC
-  (decisión del Señor, 2026-08-19).
+- **Fecha**: 2026-08-18 (ping, 8 modelos, 2 CPU/3 Gi, `timeout 1s`) y 2026-08-19 (tarea de programación, 6 modelos, 2 CPU/4 Gi, `timeout 5s`).
+- **Entorno**: pod `ollama/ollama:0.32.14`, PVC `ollama-models` 20Gi (`nfs-storage`). La carga y generación se midieron sobre el pod real, no sobre el host completo, para reflejar el uso real (opencode/Node-RED).
+- **Modelos probados**: ping **8** (`tinyllama:1.1b`, `qwen2.5-coder:1.5b`, `qwen2.5:1.5b`, `qwen2.5-coder:3b`, `gemma2:2b`, `llama3.2:3b`, `qwen3:4b`, `phi3:mini`); programación **6** (`qwen2.5-coder:3b`, `granite-code:3b`, `llama3.2:3b`, `yi-coder:1.5b`, `deepseek-coder:1.3b`, `smollm2:1.7b` — subconjunto; `tinyllama/qwen2.5/gemma2` excluidos, `llama3.2:3b` repescado).
+- **Estado de los modelos**: ping: 5 pasan, 1 supera 5 s, 2 descartados por inestabilidad (`qwen3:4b`/`phi3:mini` reiniciaban pod con `timeout 1s`). Programación: 6 probados, 1 acierto con RCE. **PVC final** `verificado 2026-08-20` (ver `03-Aplicaciones.md#opencode`): **5 modelos** (`granite3.2:2b`, `llama3.2:3b`, `qwen2.5-coder:1.5b`, `qwen2.5-coder:3b`, `smollm2:1.7b`) tras reemplazar `deepseek-coder:1.3b`+`yi-coder:1.5b`→`qwen2.5-coder:1.5b` y `granite-code:3b`→`granite3.2:2b`. Inicialmente se conservaron 6 (2026-08-19), migration el 2026-08-20 dejó 5.
 
 ---
 
@@ -64,11 +60,7 @@ probaron 6 lenguajes: Dart, C, Python, bash, JS y Java.
 6. Criterio `Funciona?` = **compila y produce el resultado esperado en todo el
    corpus**. Si no funciona, las demás columnas se puntúan `—`.
 
-**Notas de medición**: en la ronda de 5 lenguajes el pod ya tenía el límite de
-4 GiB y las probes con timeout 5 s. Cada petición se midió con `keep_alive:0`,
-así que el **tiempo incluye la recarga del modelo** (TTFT ≈ TOTAL) — no es
-comparable con el benchmark «ping», que medía consultas calientes de una
-palabra.
+**Notas de medición**: ping se midió con límite 3 Gi y `timeoutSeconds: 1` (histórico hasta 2026-08-18); en la ronda de programación (5 lenguajes el 2026-08-19) el pod ya tenía el límite de 4 GiB y las probes con `timeout 5s`. Cada petición se midió con `keep_alive:0`, así que el **tiempo incluye la recarga del modelo** (TTFT ≈ TOTAL) — no es comparable con el benchmark «ping», que medía consultas calientes de una palabra.
 
 ### 2.2 Prompt de activación
 
@@ -180,10 +172,10 @@ CiberSeguridad es 1/10 y no es apto para uso real.
 ### 2.7 Conclusión
 
 Ningún modelo ≤ 3B es fiable para generar código de esa complejidad en 6
-lenguajes; el único acierto (yi-coder JS) es además un antipatrón de
-seguridad. Para el uso real (opencode) **qwen2.5-coder:3b sigue siendo la
+lenguajes; el único acierto (yi-coder:1.5b en JS) es además un antipatrón de
+seguridad (`eval = RCE`). Para el uso real (opencode) **qwen2.5-coder:3b sigue siendo la
 mejor opción** por su calidad relativa de código y tiempos razonables,
 asumiendo que **el código generado siempre se revisa** (los fallos de
-precedencia en C/Python lo demuestran). Los tiempos de esta sección (30-500 s)
-no son comparables a los del ping (0.5-6 s): la tarea de programación genera
-1-9 KB de tokens y cada petición recarga el modelo.
+precedencia en C/Python lo demuestran). Los tiempos de esta sección (30-500 s, 4 Gi/`timeout 5s`)
+no son comparables a los del ping (0.5-6 s, 3 Gi/`timeout 1s`): la tarea de programación genera
+1-9 KB de tokens y cada petición recarga el modelo. **PVC final**: 5 modelos (ver cabecera).

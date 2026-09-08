@@ -383,13 +383,13 @@ kubectl get pods -A
 
 ### Radio SDR remota (rtl_tcp) — LXC proxy device
 
-Cadena de acceso público para el servidor de radio (servicio `rtl-sdr`, ver [03-Aplicaciones.md#radio-sdr-remota-rtl_tcp](./03-Aplicaciones.md#radio-sdr-remota-rtl_tcp)):
+Cadena de acceso público para el servidor de radio (servicio `rtl-sdr`, ver [03-Aplicaciones.md#radio-sdr-remota-rtl_tcp](./03-Aplicaciones.md#radio-sdr-remota-rtl_tcp) — `verificado 2026-08-14` `RTL0`, GQRX `960000` `~15.4 Mbps` (`960k × 16 bit`), defecto `2400000` `~38.4 Mbps` satura DV0):
 
 ```
-GQRX (RTL-SDR TCP) → sdr.elarreglador.eu:1234
+GQRX (RTL-SDR TCP, Input rate 960000) → sdr.elarreglador.eu:1234
   → nginx stream DV0 (listen 1234 → 10.8.0.11:1234)        [en DV0]
   → LXC proxy device `proxyrtlsdr` (10.8.0.11:1234)          [en D1]
-  → 127.0.0.1:31234 (NodePort `rtl-sdr`, k8s-worker-1)
+  → 127.0.0.1:31234 (NodePort `rtl-sdr`, k8s-worker-1, LoadBalancer 192.168.1.60 conservado)
   → pod rtl-sdr (privilegiado, /dev/bus/usb) → dongle USB
 ```
 
