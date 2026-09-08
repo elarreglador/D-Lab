@@ -27,6 +27,11 @@ data:
     CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
     TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}/sendMessage" if TOKEN else ""
 
+    # Opción B: filtro FIRING por lista de ruido LXC. RESOLVED nunca se filtra.
+    # Configurable por env sin rebuild: IGNORE_ALERTS="Watchdog,TargetDown,..."
+    _raw_ignore = os.environ.get("IGNORE_ALERTS", "Watchdog,TargetDown,etcdMembersDown,etcdInsufficientMembers,KubeCPUOvercommit,KubeMemoryOvercommit,InfoInhibitor")
+    IGNORED_ALERTS = {s.strip() for s in _raw_ignore.split(",") if s.strip()}
+
     app = FastAPI(title="telegram-bot")
 
     class NotifyRequest(BaseModel):
@@ -155,14 +160,34 @@ data:
     async def alert(req: AlertRequest):
         if not req.alerts:
             raise HTTPException(status_code=400, detail="alerts vacio")
-        lines = [_format_alert(a, req.status or "firing") for a in req.alerts]
+        # Opción B: filtra solo FIRING de ruido LXC; RESOLVED siempre pasa.
+        filtered = []
+        skipped = []
+        for a in req.alerts:
+            labels = a.get("labels", {}) if isinstance(a, dict) else {}
+            status = a.get("status", req.status or "firing")
+            name = labels.get("alertname", "")
+            if status == "firing" and name in IGNORED_ALERTS:
+                skipped.append(name)
+                continue
+            filtered.append(a)
+        if not filtered:
+            log.info(f"alert filtered all {len(skipped)} firing ignored: {skipped}")
+            _append_history({"source": "alert", "text": f"[filtrado] firing ignorado: {skipped}", "alerts": req.alerts, "filtered": True, "skipped": skipped})
+            return {"ok": True, "filtered": True, "skipped": skipped, "alerts": 0}
+        if skipped:
+            log.info(f"alert partially filtered: kept {len(filtered)}/{len(req.alerts)}, skipped {skipped}")
+        lines = [_format_alert(a, req.status or "firing") for a in filtered]
         text = "\n\n".join(lines)
         if req.groupLabels:
             text = f"Grupo: {req.groupLabels}\n\n" + text
+        # Anota si hubo filtrado parcial para trazabilidad en Telegram
+        if skipped:
+            text = f"[filtrado FIRING ignorado: {', '.join(skipped)}]\n\n" + text
         data = await _send_telegram(text, None, False)
         mid = data.get("result", {}).get("message_id")
-        _append_history({"source": "alert", "text": text, "message_id": mid, "alerts": req.alerts, "groupLabels": req.groupLabels})
-        return {"ok": True, "message_id": mid, "alerts": len(req.alerts)}
+        _append_history({"source": "alert", "text": text, "message_id": mid, "alerts": filtered, "groupLabels": req.groupLabels, "skipped": skipped})
+        return {"ok": True, "message_id": mid, "alerts": len(filtered), "skipped": skipped}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -227,6 +252,8 @@ spec:
                 secretKeyRef:
                   name: telegram-bot-secret
                   key: TELEGRAM_CHAT_ID
+            - name: IGNORE_ALERTS
+              value: "Watchdog,TargetDown,etcdMembersDown,etcdInsufficientMembers,KubeCPUOvercommit,KubeMemoryOvercommit,InfoInhibitor"
             - name: PYTHONUNBUFFERED
               value: "1"
           securityContext:

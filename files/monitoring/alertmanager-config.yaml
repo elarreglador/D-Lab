@@ -1,0 +1,63 @@
+# Fuente de verdad del routing de Alertmanager — Opción B
+# No silencia RESOLVED. Filtra FIRING de ruido LXC en la capa Alertmanager;
+# el guardarraíl secundario vive en telegram-bot (IGNORE_ALERTS).
+# Se aplica con scripts/patch-alertmanager.sh -> Secret alertmanager-kube-prometheus-stack-alertmanager
+# Verificado contra chart kube-prometheus-stack v88.0.1 + alertmanager v0.33.1
+
+# Este fichero se inyecta como valor de `alertmanager.yaml` dentro del Secret.
+# Equivale a `data.alertmanager.yaml` base64.
+alertmanager.yaml: |
+  global:
+    resolve_timeout: 5m
+
+  # Plantilla por defecto — null evita spam si una alerta no matchea ningún route
+  route:
+    receiver: "null"
+    group_by: ["alertname", "cluster", "service"]
+    group_wait: 5m
+    group_interval: 10m
+    repeat_interval: 12h
+    routes:
+      # Ruta prioritaria: alertas útiles de D-Lab (PrometheusRule alertas-personalizadas)
+      # HostDown, ClusterNodeNotReady, DiskPressureHost, CertificateExpiring
+      - receiver: telegram
+        matchers:
+          - alertname =~ "HostDown|ClusterNodeNotReady|DiskPressureHost|CertificateExpiring"
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 6h
+        continue: false
+
+      # Ruta genérica: cualquier firing con severity critical|warning que NO sea ruido LXC
+      # Resolved pasa siempre (send_resolved: true en receiver) — ver pie
+      - receiver: telegram
+        matchers:
+          - severity =~ "critical|warning"
+          - alertname !~ "Watchdog|TargetDown|etcdMembersDown|etcdInsufficientMembers|KubeCPUOvercommit|KubeMemoryOvercommit|InfoInhibitor"
+        group_wait: 5m
+        group_interval: 10m
+        repeat_interval: 12h
+        continue: false
+
+      # Fallback explícito para ruido LXC -> null (no notifica FIRING, pero
+      # tampoco genera error de "no receiver"). RESOLVED de estas también va a null
+      # pero telegram-bot lo dejará pasar si llega por otra vía; el filtro fino es allí.
+      - receiver: "null"
+        matchers:
+          - alertname =~ "Watchdog|TargetDown|etcdMembersDown|etcdInsufficientMembers|KubeCPUOvercommit|KubeMemoryOvercommit|InfoInhibitor"
+        group_wait: 5m
+        repeat_interval: 24h
+
+  receivers:
+    - name: "null"
+    - name: telegram
+      webhook_configs:
+        - url: http://telegram-bot.pods.svc:8080/alert
+          send_resolved: true
+          max_alerts: 10
+
+  inhibit_rules:
+    # Si firing critical suprime el info del mismo alertname
+    - source_matchers: ['severity="critical"']
+      target_matchers: ['severity="info"']
+      equal: ["alertname", "instance"]

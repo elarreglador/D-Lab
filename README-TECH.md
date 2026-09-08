@@ -1501,7 +1501,7 @@ kube-prometheus-stack (helm, namespace monitoring)
   ├─ prometheus-0        ── scrape: kubelet, apiserver, coredns, node-exporter,
   │                         kube-state-metrics, host-node (D1/D2), dv0-host (DV0), cert-manager
   ├─ grafana (3/3)       ── exposed en https://grafana.elarreglador.eu
-  ├─ alertmanager        ── sin receiver (alertas solo UI)
+  ├─ alertmanager        ── receiver telegram (filtrado Opción B, ver Fase 14D)
   └─ node-exporter DS    ── métricas de los 4 nodos K8s
 node-exporter nativo en D1/D2 (apt) ── métricas de los hosts físicos (OS)
 node-exporter en DV0 (10.8.0.1:9100) ── métricas del jumpbox, vía relay socat en D2 (:19200)
@@ -1512,7 +1512,7 @@ node-exporter en DV0 (10.8.0.1:9100) ── métricas del jumpbox, vía relay so
 - **Monitorización del almacenamiento vía node-exporter (no kubelet)** (verificado 2026-08-31): `kubelet_volume_stats_used|capacity_bytes{namespace="multimedia",persistentvolumeclaim="media-data"}` devuelve `vector []` para NFS (`nfs-subdir-external-provisioner` no implementa `VolumeStats`); el dashboard usa la aproximación fiel `node_filesystem_avail/size_bytes{mountpoint="/mnt/data",fstype="ext4",job="node-exporter",instance="192.168.1.31:9100"}` (brick sda1, único uso) y `node_disk_read|written_bytes_total{device="sda"}` agregado y per-worker.
 - **Recursos ajustados**: el primer despliegue hizo OOM a Grafana (límite 256Mi → `exitCode 137`). Se subió a 512Mi/200Mi. DV0 con 1 vCPU no soportaría este stack; por eso corre en los nodos del cluster.
 - **Node-exporter host en ambos modos**: DaemonSet para los 4 nodos K8s + paquete nativo `prometheus-node-exporter` en D1/D2 (métricas del OS físico del host, no del container) + binario en DV0 (bind a `10.8.0.1:9100`, únicamente por túnel WG).
-- **Alertas sin notificación**: solo se ven en la UI de AlertManager (sin receiver). El usuario decidió no configurar envíos externos en esta fase.
+- **Alertas con notificación filtrada (Opción B, 2026-09-08)**: `Alertmanager` rutea a `telegram-bot` (`http://telegram-bot.pods.svc:8080/alert`, `send_resolved: true`) solo para alertas útiles `HostDown|ClusterNodeNotReady|DiskPressureHost|CertificateExpiring` y `critical|warning` no ruido; ruido LXC `Watchdog|TargetDown|etcdMembersDown|etcdInsufficientMembers` silenciado solo en `FIRING` (`resolved` siempre pasa) — fuente `files/monitoring/alertmanager-config.yaml` aplicada con `scripts/patch-alertmanager.sh` + guardarraíl secundario `IGNORE_ALERTS` en `files/telegram-bot/telegram-bot.yaml:29`. `repeat_interval 12h` (útiles 6h) evita spam.
 
 **Limitación de red descubierta (macvlan)**:
 Los containers LXD usan red **macvlan** (`macvlan0`), que por diseño impide que un container alcance a su **propio host**. D1 no es alcanzable desde los containers que corren en D1 (ni por IP LAN ni WG), mientras que D2 sí es alcanzable (los containers de D1 llegan a `192.168.1.12`). Solución adoptada para D1:
@@ -1572,8 +1572,8 @@ curl -s 'http://127.0.0.1:9090/api/v1/query?query=node_uname_info'
 - **Incidencia resuelta**: Grafana pedía login en cada página. Causa raíz: falta de `root_url`/`domain` → el frontend recibía `appUrl=http://localhost:3000/` y la sesión se perdía al navegar. Se corrigió en `values-monitoring.yaml` (`server.root_url`/`domain` + `security.cookie_secure`/`cookie_samesite`) y se aplicó con `helm upgrade` en k8s-master-1 (backup previo en `/root/values-monitoring.yaml.bak-*`). Verificado: `appUrl=https://grafana.elarreglador.eu/`, login persiste entre páginas. Posteriormente se retiró la basic-auth del Ingress de Grafana (login propio como única barrera) y se eliminó el Secret `web-basic-auth` de `monitoring`.
 - **Ojo con Grafana 13**: el endpoint `POST /login` espera **JSON** (`Content-Type: application/json`, cuerpo `{"user":...,"password":...}`), no form-urlencoded. Además aplica *rate limiting* por IP tras varios intentos fallidos (~10 min); en automatización es más fiable **Basic Auth** (`curl -u user:pass .../api/user`).
 - **Reset de `admin` de Grafana**: como el storage es `emptyDir`, la DB arranca limpia al recrear el pod y el admin se crea con la password del Secret. Para forzar una password nueva: patch al Secret (`admin-password`, base64) + `kubectl -n monitoring rollout restart deploy/kube-prometheus-stack-grafana`, o `grafana cli admin reset-admin-password` dentro del pod.
-- Las alertas por defecto de kube-prometheus-stack `TargetDown`, `etcdMembersDown` e `etcdInsufficientMembers` aparecen **firing** en AlertManager porque los targets `kube-etcd`, `kube-scheduler`, `kube-controller-manager` y `kube-proxy` no exponen métricas en los puertos por defecto en este cluster LXC. Es ruido esperable en esta configuración; la cadena principal (kubelet, apiserver, coredns, node-exporter, hosts) está **up**.
-- `Watchdog` siempre está en firing por diseño (alerta centinela para validar el pipeline).
+- Las alertas por defecto de kube-prometheus-stack `TargetDown`, `etcdMembersDown` e `etcdInsufficientMembers` aparecen **firing** en AlertManager porque los targets `kube-etcd`, `kube-scheduler`, `kube-controller-manager` y `kube-proxy` no exponen métricas en los puertos por defecto en este cluster LXC. Es ruido esperable; la cadena principal (kubelet, apiserver, coredns, node-exporter, hosts) está **up** — desde 2026-09-08 este `FIRING` se filtra (Opción B) en Alertmanager y en `telegram-bot` (`IGNORE_ALERTS`), solo `RESOLVED` llega a Telegram.
+- `Watchdog` siempre está en firing por diseño (alerta centinela para validar el pipeline) — también filtrado solo en `FIRING`.
 
 **Prerequisitos**: Fase 11 completada, WireGuard operativo, DNS wildcard en Spaceship  
 **Duración Estimada**: 3-4 horas
