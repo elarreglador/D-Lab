@@ -143,7 +143,12 @@ data:
         status = a.get("status", default_status)
         name = labels.get("alertname", "Alert")
         summary = anns.get("summary", anns.get("description", ""))
+        # Acorta summary a 120c para evitar mensajes kilométricos
+        if summary and len(summary) > 120:
+            summary = summary[:117] + "..."
         instance = labels.get("instance", labels.get("pod", ""))
+        mountpoint = labels.get("mountpoint", "")
+        device = labels.get("device", "")
         sev = labels.get("severity", "")
         icon = "🔥" if status == "firing" else "✅"
         line = f"{icon} {status.upper()} {name}"
@@ -151,6 +156,14 @@ data:
             line += f" [{sev}]"
         if instance:
             line += f" @ {instance}"
+        # Añade mountpoint/device solo si aporta contexto (evita snaps duplicados)
+        extra = ""
+        if mountpoint and mountpoint not in ("/", ""):
+            extra = mountpoint
+        elif device:
+            extra = device
+        if extra:
+            line += f" {extra}"
         if summary:
             line += f"\n{summary}"
         return line
@@ -177,10 +190,23 @@ data:
             return {"ok": True, "filtered": True, "skipped": skipped, "alerts": 0}
         if skipped:
             log.info(f"alert partially filtered: kept {len(filtered)}/{len(req.alerts)}, skipped {skipped}")
+        # Deduplica por (alertname, instance, mountpoint, device) — evita 10 líneas idénticas
+        seen = set()
+        deduped = []
+        for a in filtered:
+            lb = a.get("labels", {}) if isinstance(a, dict) else {}
+            key = (lb.get("alertname"), lb.get("instance"), lb.get("mountpoint"), lb.get("device"))
+            if key not in seen:
+                seen.add(key)
+                deduped.append(a)
+        if len(deduped) < len(filtered):
+            log.info(f"alert dedup {len(filtered)} -> {len(deduped)}")
+            filtered = deduped
         lines = [_format_alert(a, req.status or "firing") for a in filtered]
         text = "\n\n".join(lines)
-        if req.groupLabels:
-            text = f"Grupo: {req.groupLabels}\n\n" + text
+        # Grupo compacto: solo alertname, no dump crudo del dict
+        if req.groupLabels and req.groupLabels.get("alertname"):
+            text = f"Grupo: {req.groupLabels.get('alertname')}\n\n" + text
         # Anota si hubo filtrado parcial para trazabilidad en Telegram
         if skipped:
             text = f"[filtrado FIRING ignorado: {', '.join(skipped)}]\n\n" + text

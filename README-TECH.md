@@ -1546,7 +1546,7 @@ Los containers LXD usan red **macvlan** (`macvlan0`), que por diseño impide que
    - Grafana sin anonymous: **login admin** (`admin` / `adminPassword` de `values-monitoring.yaml`).
    - `grafana.ini` (via `grafana.grafana.ini`): `server.root_url`/`server.domain` (obligatorios detrás del proxy TLS; sin ellos `appUrl=http://localhost:3000/` y la sesión se pierde al navegar) y `security.cookie_secure`/`cookie_samesite`. Detalle y pods: [03-Aplicaciones.md](./03-Aplicaciones.md).
 
-4. **ServiceMonitor cert-manager** (Service `cert-manager:9402` en namespace `cert-manager`) + **PrometheusRule `alertas-personalizadas`** (grupo `host-alertas`): `HostDown` (hosts), `ClusterNodeNotReady`, `DiskPressureHost` (>85%), `CertificateExpiring` (<30 días).
+4. **ServiceMonitor cert-manager** (Service `cert-manager:9402` en namespace `cert-manager`) + **PrometheusRule `alertas-personalizadas`** (grupo `host-alertas`, `files/monitoring/alertas-personalizadas.yaml`, `verificado 2026-09-08`): `HostDown` (hosts), `ClusterNodeNotReady`, `DiskPressureHost` (>85% solo `/mnt/data` con `{{ $value }}`), `CertificateExpiring` (<30 días).
 
 **Verificación**:
 ```bash

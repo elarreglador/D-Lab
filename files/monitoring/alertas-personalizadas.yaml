@@ -1,0 +1,49 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: alertas-personalizadas
+  namespace: monitoring
+  labels:
+    app: alertas-personalizadas
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: host-alertas
+      rules:
+        - alert: HostDown
+          expr: up{job="host-node"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "El host {{ $labels.host }} no responde"
+
+        - alert: ClusterNodeNotReady
+          expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Nodo {{ $labels.node }} no está Ready"
+
+        # Solo /mnt/data (400Gi nfs-storage-v4 sobre Gluster, VIP 192.168.1.30).
+        # Antes vigilaba todos los fstype!~tmpfs|overlay... e incluía snaps
+        # fuse.snapfuse (/snap/*) al 100% → hasta 10 alertas identicas por mensaje.
+        # Verificado 2026-09-08: DiskPressureHost agrupaba 10 snaps idénticos.
+        - alert: DiskPressureHost
+          expr: |
+            (1 - node_filesystem_avail_bytes{mountpoint="/mnt/data"}
+               / node_filesystem_size_bytes{mountpoint="/mnt/data"}) * 100 > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Disco /mnt/data en {{ $labels.instance }} por encima del 85% ({{ $value | printf \"%.1f\" }}%)"
+
+        - alert: CertificateExpiring
+          expr: certmanager_certificate_expiration_timestamp_seconds - time() < 30 * 24 * 3600
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "El certificado {{ $labels.name }} expira en menos de 30 días"
