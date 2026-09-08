@@ -45,6 +45,10 @@ spec:
               value: "1000"
             - name: TZ
               value: Europe/Madrid
+            - name: INCOMING_DIR
+              value: "/data/amule/incoming"
+            - name: TEMP_DIR
+              value: "/data/amule/temp"
             # ngosang/amule: WEBUI_PWD y EC password se leen de estas env si existen.
             # Si no hay Secret, el entrypoint genera auth sin password (no deseado).
             - name: WEBUI_PWD
@@ -87,6 +91,17 @@ spec:
               mountPath: /home/amule/.aMule
             - name: media
               mountPath: /data
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    sed -i 's|^TempDir=.*|TempDir=/data/amule/temp|' /home/amule/.aMule/amule.conf
+                    sed -i 's|^IncomingDir=.*|IncomingDir=/data/amule/incoming|' /home/amule/.aMule/amule.conf
+                    sed -i 's/^MaxDownload=.*/MaxDownload=4880/' /home/amule/.aMule/amule.conf
+                    sed -i 's/^MaxUpload=.*/MaxUpload=4880/' /home/amule/.aMule/amule.conf
       volumes:
         - name: config
           persistentVolumeClaim:

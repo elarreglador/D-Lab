@@ -35,39 +35,87 @@ spec:
               value: Europe/Madrid
           resources:
             requests:
-              cpu: 500m
-              memory: 512Mi
-            limits:
               cpu: 1
-              memory: 2Gi
+              memory: 1Gi
+            limits:
+              cpu: 1500m
+              memory: 3Gi
           startupProbe:
             httpGet:
               path: /
               port: 8096
             initialDelaySeconds: 15
-            periodSeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
             failureThreshold: 36
           readinessProbe:
             httpGet:
               path: /
               port: 8096
             initialDelaySeconds: 5
-            periodSeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
           livenessProbe:
             httpGet:
               path: /
               port: 8096
-            initialDelaySeconds: 30
-            periodSeconds: 10
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
           volumeMounts:
             - name: config
               mountPath: /config
+            - name: cache
+              mountPath: /config/cache
             - name: media
               mountPath: /data
+      initContainers:
+        - name: restore
+          image: alpine:3.19
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              # Si ya hay DB local, no hacer nada (arranque normal)
+              if [ -f /config/data/data/jellyfin.db ]; then
+                echo "DB local presente, sin restore"
+                exit 0
+              fi
+              # Buscar último backup recortado en NFS (/backup = media-data:/backup/jellyfin)
+              if [ -f /backup/latest.tgz ]; then
+                echo "Restaurando desde /backup/latest.tgz ..."
+                mkdir -p /config
+                tar -xzf /backup/latest.tgz -C /config
+                echo "Restore completado"
+                # Verificación básica
+                if [ -f /config/data/data/jellyfin.db ]; then
+                  echo "DB restaurada OK"
+                else
+                  echo "WARN: DB no encontrada tras restore"
+                fi
+              else
+                echo "Sin backup previo, arranque limpio"
+              fi
+              chown -R 1000:1000 /config 2>/dev/null || true
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: backup
+              mountPath: /backup
+              subPath: backup/jellyfin
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: jellyfin-config
+            claimName: jellyfin-config-local
+        - name: cache
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: backup
+          persistentVolumeClaim:
+            claimName: media-data
         - name: media
           persistentVolumeClaim:
             claimName: media-data

@@ -1,0 +1,101 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: jellyfin-db-backup
+  namespace: multimedia
+  labels:
+    app.kubernetes.io/part-of: multimedia
+    app: jellyfin
+spec:
+  schedule: "0 3 * * 1,4"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: multimedia
+            app: jellyfin
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            eu.elarreglador/worker: "true"
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: app
+                        operator: In
+                        values: [jellyfin]
+                  topologyKey: kubernetes.io/hostname
+          securityContext:
+            fsGroup: 1000
+          containers:
+            - name: backup
+              image: alpine:3.19
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  echo "=== Jellyfin recortado backup $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+                  # Verificar DB local
+                  if [ ! -f /config/data/data/jellyfin.db ]; then
+                    echo "WARN: DB no encontrada en /config, omitiendo"
+                    exit 0
+                  fi
+                  mkdir -p /backup
+                  TS=$(date -u +%Y%m%d-%H%M)
+                  OUT="/backup/jellyfin-${TS}.tgz"
+                  TMPDIR="/tmp/jellyfin-backup.$$"
+                  mkdir -p "$TMPDIR"
+                  echo "Creando snapshot recortado..."
+                  # Copiar solo lo esencial: DB + configs, sin metadata (641M) ni cache (120-300M)
+                  cp -a /config/data/data "$TMPDIR/" 2>/dev/null || true
+                  cp -a /config/*.xml /config/*.json "$TMPDIR/" 2>/dev/null || true
+                  # Si hay .backup-tmp previo, limpiarlo
+                  tar -czf "$OUT" -C "$TMPDIR" .
+                  echo "Backup creado: $OUT ($(du -h "$OUT" | cut -f1))"
+                  ln -sf "$(basename "$OUT")" /backup/latest.tgz
+                  # Verificación
+                  if [ -s "$OUT" ]; then
+                    echo "OK: $(ls -lh "$OUT" | awk '{print $9, $5}')"
+                  else
+                    echo "ERROR: backup vacío"
+                    exit 1
+                  fi
+                  # Retención: 2 meses (16 copias lunes/jueves) -> 60 días
+                  echo "Limpiando copias >60 días..."
+                  find /backup -name "jellyfin-*.tgz" -mtime +60 -delete -print 2>/dev/null || true
+                  echo "Copias actuales:"
+                  ls -1 /backup/jellyfin-*.tgz 2>/dev/null | head -n 20
+                  echo "Total: $(ls -1 /backup/jellyfin-*.tgz 2>/dev/null | wc -l) copias, $(du -sh /backup 2>/dev/null | cut -f1)"
+                  rm -rf "$TMPDIR"
+                  echo "=== Backup completado ==="
+              volumeMounts:
+                - name: config
+                  mountPath: /config
+                - name: backup
+                  mountPath: /backup
+                  subPath: backup/jellyfin
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          volumes:
+            - name: config
+              persistentVolumeClaim:
+                claimName: jellyfin-config-local
+            - name: backup
+              persistentVolumeClaim:
+                claimName: media-data

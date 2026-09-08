@@ -24,9 +24,22 @@ MM="$BASE/files/multimedia"
 KUBECTL_HOST="${KUBECTL_HOST:-server}"
 NS="multimedia"
 
-echo "[1/5] Aplicando namespace y almacenamiento (media-data + qbittorrent/jellyfin/amule)..."
+echo "[1/5] Aplicando namespace y almacenamiento (media-data + qbittorrent/jellyfin/amule + jellyfin local)..."
 cat "$MM/namespace.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 cat "$MM/storage.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+# PVs locales para jellyfin-config (móvil con paracaídas)
+if [ -f "$MM/storage-local-jellyfin.yaml" ]; then
+  echo "  -> storage-local-jellyfin (2 PV local + PVC jellyfin-config-local)"
+  cat "$MM/storage-local-jellyfin.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+  # Crear directorios hostPath en ambos workers (una vez, idempotente)
+  for w in k8s-worker-1 k8s-worker-2; do
+    echo "  Preparando /srv/k8s-local/jellyfin en $w..."
+    ssh "$KUBECTL_HOST" "lxc exec $w -- sh -c 'mkdir -p /srv/k8s-local/jellyfin && chown 1000:1000 /srv/k8s-local/jellyfin && chmod 775 /srv/k8s-local/jellyfin' 2>&1 | head -n 5" || true
+  done
+  # Crear subdirectorio backup/jellyfin en media-data (NFS) para el paracaídas
+  ssh "$KUBECTL_HOST" "kubectl -n $NS exec deploy/jellyfin -- mkdir -p /data/backup/jellyfin 2>&1 | head -n 5" || \
+  ssh "$KUBECTL_HOST" "kubectl -n $NS run tmp-mkdir --rm -i --restart=Never --image=alpine:3.19 --overrides='{\"spec\":{\"nodeSelector\":{\"eu.elarreglador/worker\":\"true\"}}}' -- sh -c 'mkdir -p /data/backup/jellyfin && chown 1000:1000 /data/backup/jellyfin' --volume-mount=/data 2>&1 | head -n 5" || true
+fi
 
 echo "Esperando a que las PVCs queden Bound..."
 ssh "$KUBECTL_HOST" "kubectl -n $NS wait --for=jsonpath='{.status.phase}'=Bound pvc --all --timeout=180s"
@@ -113,7 +126,7 @@ spec:
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: jellyfin-config
+            claimName: jellyfin-config-local
         - name: apikey
           secret:
             secretName: jellyfin-apikey
@@ -147,6 +160,10 @@ cat "$MM/certificate-amule.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 cat "$MM/ingress-amule.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 cat "$MM/jellyfin-auto-scan.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 echo "  CronJob jellyfin-auto-scan aplicado (0 * * * *, Forbid, activeDeadline 3300s)"
+if [ -f "$MM/jellyfin-backup.yaml" ]; then
+  cat "$MM/jellyfin-backup.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+  echo "  CronJob jellyfin-db-backup aplicado (lunes/jueves 03:00, recortado 8M, 2 meses)"
+fi
 
 echo
 echo "[5/5] Esperando a que todos los Deployments estén listos..."

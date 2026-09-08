@@ -13,9 +13,12 @@ spec:
       storage: 400Gi
   storageClassName: nfs-storage-v4
 ---
-# PVCs NFS para los 3 servicios simplificados (qBittorrent, Jellyfin, aMule).
-# Todos usan nfs-storage-v4 (NFSv4, locks integrados) y son móviles
+# PVCs NFS para los 3 servicios (qBittorrent, aMule, media-data).
+# qbittorrent-config y amule-config usan nfs-storage-v4 (NFSv4, locks integrados) y son móviles
 # entre workers (nodeSelector eu.elarreglador/worker=true).
+# jellyfin-config es PVC de respaldo NFS (no activo): Jellyfin usa jellyfin-config-local
+# (local-static, hostPath /srv/k8s-local/jellyfin, ver storage-local-jellyfin.yaml) desde 2026-09-06
+# por fsync ~66ms sobre Gluster-HDD (ver incidentes/jellyfin-lentitud-20260906.md).
 # Historial: los PV local-static y PVC *-config-local de sonarr/radarr/prowlarr
 # y jellyseerr se eliminaron el 2026-08-29 al simplificar el stack a
 # Jellyfin+qBittorrent+aMule (ver git log). Se liberaron las IPs .54-.57.

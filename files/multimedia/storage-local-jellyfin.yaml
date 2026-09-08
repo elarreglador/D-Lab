@@ -1,0 +1,73 @@
+# PVs locales para jellyfin-config — móvil con paracaídas (backup NFS).
+# 2× PV local-static, uno por worker, path /srv/k8s-local/jellyfin.
+# El PVC es WaitForFirstConsumer y queda Bound al primer worker que lo use;
+# al caer ese worker el pod se reprograma al otro tras initContainer restore desde NFS.
+# Ver 03-Aplicaciones.md § Jellyfin móvil con paracaídas.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-jellyfin-config-worker-1
+  labels:
+    app.kubernetes.io/part-of: multimedia
+    app: jellyfin
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-static
+  local:
+    path: /srv/k8s-local/jellyfin
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-worker-1
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-jellyfin-config-worker-2
+  labels:
+    app.kubernetes.io/part-of: multimedia
+    app: jellyfin
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-static
+  local:
+    path: /srv/k8s-local/jellyfin
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-worker-2
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-config-local
+  namespace: multimedia
+  labels:
+    app: jellyfin
+    app.kubernetes.io/part-of: multimedia
+spec:
+  storageClassName: local-static
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
