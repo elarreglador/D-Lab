@@ -1,0 +1,251 @@
+# Organiza la música descargada por aMule en la jerarquía Artista/Álbum que espera Jellyfin.
+#
+# Orden de resolución de metadatos:
+#   1. ID3v2 (MP3)
+#   2. ID3v1 (MP3, tag de 128 bytes al final; lo que traen los ficheros de eDonkey)
+#   3. Nombre del fichero "Artista - Título.mp3"
+#   4. "Unknown Artist" / "Unknown Album"
+#
+# Sin dependencias: solo librería estándar de Python. No hay `apk add` ni `pip install`
+# en tiempo de ejecución, de modo que el pod puede llevar readOnlyRootFilesystem: true
+# y seguir siendo autónomo aunque no tenga red.
+#
+# aMule deja los ficheros terminados en AMULE_INCOMING (los .part van a AMULE_TEMP,
+# así que no hay riesgo de mover algo a medio escribir). Las carpetas `movies` y `tv`
+# de incoming son enlaces simbólicos a /data/media/{movies,tv}: os.walk con
+# followlinks=False las ignora, así que aquí solo se tocan los ficheros de audio sueltos.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: amule-music-organizer
+  namespace: multimedia
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  schedule: "*/29 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 600
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: multimedia
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            eu.elarreglador/worker: "true"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: organizer
+              image: python:3.11-alpine
+              env:
+                - name: AMULE_INCOMING
+                  value: "/data/amule/incoming"
+                - name: MUSIC_ROOT
+                  value: "/data/media/music"
+                - name: TZ
+                  value: Europe/Madrid
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+                readOnlyRootFilesystem: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              command:
+                - python3
+                - -c
+              args:
+                - |
+                  import os
+                  import re
+                  import shutil
+                  import sys
+                  import unicodedata
+                  from pathlib import Path
+
+                  AUDIO_EXT = {
+                      ".mp3", ".flac", ".ogg", ".oga", ".opus", ".m4a", ".mp4",
+                      ".wav", ".aac", ".wma", ".aiff", ".ape", ".wv",
+                  }
+                  MAX_LEN = 120
+
+                  incoming = Path(os.environ["AMULE_INCOMING"])
+                  music_root = Path(os.environ["MUSIC_ROOT"])
+                  music_root.mkdir(parents=True, exist_ok=True)
+
+                  def clean(value, fallback):
+                      """Sanea un valor coming de tags o del nombre sin perder acentos."""
+                      text = "".join(
+                          ch for ch in value
+                          if ch.isprintable() and unicodedata.category(ch)[0] != "C"
+                      )
+                      text = re.sub(r'[\\/:*?"<>|]', "_", text)
+                      text = re.sub(r"\s+", " ", text).strip(" .")
+                      if text in ("", ".", "..") or text.startswith("-"):
+                          text = fallback
+                      text = text[:MAX_LEN].strip(" .")
+                      return text or fallback
+
+                  def decode_id3_text(data):
+                      if not data:
+                          return ""
+                      encoding, body = data[0], data[1:]
+                      codecs = {
+                          0: "latin-1",
+                          1: "utf-16",
+                          2: "utf-16-be",
+                          3: "utf-8",
+                      }.get(encoding, "utf-8")
+                      try:
+                          text = body.decode(codecs)
+                      except (UnicodeDecodeError, LookupError):
+                          text = body.decode("latin-1", "replace")
+                      return text.replace("\x00", "").strip()
+
+                  def read_id3v2(path):
+                      try:
+                          with path.open("rb") as fh:
+                              # Cabecera ID3v2 de 10 bytes: "ID3"(3) + versión(2) + flags(1)
+                              # + tamaño synchsafe(4, bytes 6..9). Los frames empiezan en 10.
+                              header = fh.read(10)
+                              if len(header) < 10 or header[:3] != b"ID3":
+                                  return {}
+                              size = (
+                                  (header[6] & 0x7F) << 21
+                                  | (header[7] & 0x7F) << 14
+                                  | (header[8] & 0x7F) << 7
+                                  | (header[9] & 0x7F)
+                              )
+                              remaining = min(size, max(0, path.stat().st_size - 10))
+                              tags = {}
+                              while remaining >= 10:
+                                  frame_id = fh.read(4)
+                                  if len(frame_id) < 4 or frame_id == b"\x00" * 4:
+                                      break
+                                  raw_size = fh.read(4)
+                                  if len(raw_size) < 4:
+                                      break
+                                  frame_size = int.from_bytes(raw_size, "big")
+                                  fh.read(2)
+                                  if frame_size <= 0 or frame_size > remaining:
+                                      break
+                                  text = decode_id3_text(fh.read(frame_size))
+                                  remaining -= 10 + frame_size
+                                  if not text:
+                                      continue
+                                  if frame_id == b"TPE1":
+                                      tags["artist"] = text
+                                  elif frame_id == b"TALB":
+                                      tags["album"] = text
+                                  elif frame_id == b"TIT2":
+                                      tags["title"] = text
+                              return tags
+                      except OSError:
+                          return {}
+
+                  def read_id3v1(path):
+                      try:
+                          size = path.stat().st_size
+                          if size < 128:
+                              return {}
+                          with path.open("rb") as fh:
+                              fh.seek(size - 128)
+                              tag = fh.read(128)
+                          if len(tag) < 128 or tag[:3] != b"TAG":
+                              return {}
+                          tags = {}
+                          for key, start, end in (
+                              ("title", 3, 33),
+                              ("artist", 33, 63),
+                              ("album", 63, 93),
+                          ):
+                              value = tag[start:end].split(b"\x00")[0]
+                              value = value.decode("latin-1", "replace").strip()
+                              if value:
+                                  tags[key] = value
+                          return tags
+                      except OSError:
+                          return {}
+
+                  def from_filename(path):
+                      stem = re.sub(r"\([^()]*\)|\[[^\[\]]*\]", " ", path.stem)
+                      for separator in (" - ", " \u2013 ", " \u2014 ", " _ "):
+                          artist, found, title = stem.partition(separator)
+                          if found and artist.strip() and title.strip():
+                              return {"artist": artist.strip(), "title": title.strip()}
+                      return {}
+
+                  moved = 0
+                  skipped = 0
+                  failed = 0
+                  print(f"Organizando audio de {incoming} hacia {music_root}")
+                  for root, dirs, files in os.walk(incoming, followlinks=False):
+                      dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
+                      for name in sorted(files):
+                          path = Path(root) / name
+                          if path.is_symlink() or path.suffix.lower() not in AUDIO_EXT:
+                              continue
+                          if name.endswith(".part"):
+                              continue
+
+                          tags = read_id3v2(path) or read_id3v1(path)
+                          origin = "tags"
+                          if not tags.get("artist"):
+                              parsed = from_filename(path)
+                              if parsed:
+                                  origin = "tags+filename" if tags else "filename"
+                                  tags = {**parsed, **tags}
+                          artist = clean(tags.get("artist", ""), "Unknown Artist")
+                          album = clean(tags.get("album", ""), "Unknown Album")
+
+                          target_dir = music_root / artist / album
+                          target = target_dir / name
+                          try:
+                              target_dir.mkdir(parents=True, exist_ok=True)
+                          except OSError as exc:
+                              print(f"  ERROR mkdir {target_dir}: {exc}")
+                              failed += 1
+                              continue
+                          if target.exists() or target.is_symlink():
+                              print(f"  YA EXISTE: {name} -> {artist}/{album}")
+                              skipped += 1
+                              continue
+                          try:
+                              os.replace(path, target)
+                          except OSError:
+                              try:
+                                  shutil.move(str(path), str(target))
+                              except OSError as exc:
+                                  print(f"  ERROR moviendo {name}: {exc}")
+                                  failed += 1
+                                  continue
+                          moved += 1
+                          print(f"  MOVIDO: {name} -> {artist}/{album} [{origin}]")
+
+                  print(f"Resumen: {moved} movidos, {skipped} ya existentes, {failed} errores")
+                  sys.exit(1 if failed else 0)
+              volumeMounts:
+                - name: media
+                  mountPath: /data
+          volumes:
+            - name: media
+              persistentVolumeClaim:
+                claimName: media-data

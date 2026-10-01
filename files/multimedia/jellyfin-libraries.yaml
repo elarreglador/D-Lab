@@ -1,3 +1,15 @@
+# Declara en Jellyfin las librerías del stack declarativamente, vía API.
+#
+# Por qué API y no un fichero de configuración: Jellyfin >=10.9 stores las librerías en su
+# base de datos y solo las expone por API. La versión anterior de este manifiesto escribía
+# /config/data/library.xml, que Jellyfin 12.1.0 ignora por completo (verificado 2026-10-01:
+# no existen ni library.xml ni library.db en el config). Además declaraba movies/tv en
+# /media/qbittorrent/* y /media/amule/*, rutas que jellyfin.yaml no monta.
+#
+# Idempotente: si ya existe una librería apuntando a MUSIC_PATH, no hace nada.
+# Requiere que el token del Secret jellyfin-apikey esté registrado en la tabla ApiKeys de
+# jellyfin.db; lo garantiza el Job jellyfin-ensure-apikey de deploy-multimedia.sh.
+# Si el token no es válido el Job FALLA en voz alta (no un no-op silencioso).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -7,128 +19,112 @@ metadata:
     app.kubernetes.io/part-of: multimedia
 spec:
   ttlSecondsAfterFinished: 86400
-  backoffLimit: 3
+  backoffLimit: 1
   template:
     metadata:
       labels:
         app.kubernetes.io/part-of: multimedia
     spec:
       restartPolicy: Never
+      nodeSelector:
+        eu.elarreglador/worker: "true"
       containers:
-        - name: jellyfin-config
-          image: lscr.io/linuxserver/jellyfin:latest
+        - name: jellyfin-libraries
+          image: curlimages/curl:8.6.0
           env:
-            - name: PUID
-              value: "1000"
-            - name: PGID
-              value: "1000"
-            - name: TZ
-              value: Europe/Madrid
+            - name: JELLYFIN_URL
+              value: "http://jellyfin:8096"
+            - name: JELLYFIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: jellyfin-apikey
+                  key: token
+            - name: MUSIC_PATH
+              value: "/data/media/music"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
           command:
-            - /bin/bash
+            - /bin/sh
             - -c
             - |
               set -e
-              echo "Waiting for Jellyfin to be ready..."
-              for i in {1..60}; do
-                if curl -s http://jellyfin:8096/ > /dev/null 2>&1; then
-                  echo "Jellyfin is ready"
+              AUTH="Authorization: MediaBrowser Token=$JELLYFIN_API_KEY, Client=deploy, Device=deploy, Version=1.0"
+
+              # La ruta debe existir antes de declararla como librería
+              mkdir -p "$MUSIC_PATH"
+              echo "Ruta de música: $MUSIC_PATH"
+
+              echo "Esperando a la API de Jellyfin con token válido..."
+              READY=no
+              for i in $(seq 1 60); do
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "$AUTH" "$JELLYFIN_URL/System/Info" || echo 000)
+                if [ "$CODE" = "200" ]; then
+                  READY=yes
+                  echo "API lista tras $((i * 5))s"
                   break
                 fi
-                echo "Attempt $i/60 - waiting..."
-                sleep 2
-              done
-
-              echo "Adding library paths to Jellyfin..."
-              
-              # Jellyfin stores library config in /config/data/library.db (SQLite)
-              # We use the API to add libraries instead of direct DB manipulation
-              
-              JELLYFIN_URL="http://jellyfin:8096"
-              CONFIG_DIR="/config"
-              
-              # Wait for API to be responsive
-              for i in {1..30}; do
-                RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$JELLYFIN_URL/System/Info")
-                if [ "$RESPONSE" = "200" ] || [ "$RESPONSE" = "401" ]; then
-                  echo "Jellyfin API is responsive (code $RESPONSE)"
-                  break
+                if [ "$CODE" = "401" ]; then
+                  echo "ERROR: token del Secret jellyfin-apikey rechazado por Jellyfin (401)."
+                  echo "      Re-registrar con el Job jellyfin-ensure-apikey y reintentar."
+                  exit 1
                 fi
-                echo "API not ready (code $RESPONSE), waiting..."
-                sleep 2
+                sleep 5
               done
-
-              # Check if libraries already exist by looking at the config
-              if grep -q "qbittorrent" "$CONFIG_DIR/data/library.db" 2>/dev/null; then
-                echo "Libraries already configured, skipping..."
-                exit 0
+              if [ "$READY" != "yes" ]; then
+                echo "ERROR: la API de Jellyfin no respondió 200 en 300s (último código $CODE)"
+                exit 1
               fi
 
-              # Create library.xml configuration directly in Jellyfin's config
-              # This approach manipulates the library configuration file
-              cat > "$CONFIG_DIR/data/library.xml.tmp" << 'EOF'
-              <LibraryOptions>
-                <LibraryFolder>
-                  <ItemRepository>MediaFolder</ItemRepository>
-                  <Path>/media/qbittorrent/movies</Path>
-                  <LibraryMediaType>movies</LibraryMediaType>
-                  <IsEnabled>true</IsEnabled>
-                  <SaveLocalMetadata>true</SaveLocalMetadata>
-                  <RefreshIntervalDays>0.04167</RefreshIntervalDays>
-                </LibraryFolder>
-                <LibraryFolder>
-                  <ItemRepository>MediaFolder</ItemRepository>
-                  <Path>/media/qbittorrent/tv</Path>
-                  <LibraryMediaType>tvshows</LibraryMediaType>
-                  <IsEnabled>true</IsEnabled>
-                  <SaveLocalMetadata>true</SaveLocalMetadata>
-                  <RefreshIntervalDays>0.04167</RefreshIntervalDays>
-                </LibraryFolder>
-                <LibraryFolder>
-                  <ItemRepository>MediaFolder</ItemRepository>
-                  <Path>/media/amule/movies</Path>
-                  <LibraryMediaType>movies</LibraryMediaType>
-                  <IsEnabled>true</IsEnabled>
-                  <SaveLocalMetadata>true</SaveLocalMetadata>
-                  <RefreshIntervalDays>0.04167</RefreshIntervalDays>
-                </LibraryFolder>
-                <LibraryFolder>
-                  <ItemRepository>MediaFolder</ItemRepository>
-                  <Path>/media/amule/tv</Path>
-                  <LibraryMediaType>tvshows</LibraryMediaType>
-                  <IsEnabled>true</IsEnabled>
-                  <SaveLocalMetadata>true</SaveLocalMetadata>
-                  <RefreshIntervalDays>0.04167</RefreshIntervalDays>
-                </LibraryFolder>
-              </LibraryOptions>
-              EOF
+              echo "Consultando librerías existentes..."
+              EXISTING=$(curl -s -H "$AUTH" "$JELLYFIN_URL/Library/VirtualFolders")
+              if echo "$EXISTING" | grep -qF "\"Path\":\"$MUSIC_PATH\""; then
+                echo "La librería de música ya existe en $MUSIC_PATH -> nada que hacer"
+                exit 0
+              fi
+              echo "No hay librería sobre $MUSIC_PATH; creando..."
 
-              cp "$CONFIG_DIR/data/library.xml.tmp" "$CONFIG_DIR/data/library.xml" 2>/dev/null || echo "Will create library config on next Jellyfin startup"
-              
-              echo "Library configuration prepared"
-              echo "Jellyfin will auto-scan libraries on next restart"
-              
-              # Ensure proper permissions
-              chown -R 1000:1000 "$CONFIG_DIR"
-              chmod 644 "$CONFIG_DIR/data/library.xml" 2>/dev/null || true
-              
-              echo "Done!"
+              # OJO: Jellyfin 12 define POST /Library/VirtualFolders con parámetros de QUERY
+              # (name, collectionType, paths), no con un cuerpo JSON. Mandar un cuerpo devuelve
+              # 400 {"name":["The name field is required."]} aunque el JSON sea válido
+              # (verificado 2026-10-01 con jellyfin 12.1.0).
+              CODE=$(curl -s -o /tmp/resp.txt -w "%{http_code}" -X POST \
+                -H "$AUTH" \
+                --get \
+                --data-urlencode "name=Música" \
+                --data-urlencode "collectionType=music" \
+                --data-urlencode "paths=$MUSIC_PATH" \
+                --data-urlencode "refreshLibrary=false" \
+                "$JELLYFIN_URL/Library/VirtualFolders")
+
+              if [ "$CODE" = "204" ] || [ "$CODE" = "200" ]; then
+                echo "Librería de música creada correctamente (HTTP $CODE)"
+              else
+                echo "ERROR: POST /Library/VirtualFolders devolvió HTTP $CODE"
+                echo "Respuesta: $(cat /tmp/resp.txt)"
+                exit 1
+              fi
+
+              echo "Librerías tras el cambio:"
+              curl -s -H "$AUTH" "$JELLYFIN_URL/Library/VirtualFolders" \
+                | grep -o '"Name":"[^"]*"' || true
           volumeMounts:
-            - name: config
-              mountPath: /config
-            - name: qbittorrent-downloads
-              mountPath: /media/qbittorrent
-            - name: amule-downloads
-              mountPath: /media/amule
+            - name: media
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
       volumes:
-        - name: config
-          persistentVolumeClaim:
-            claimName: jellyfin-config
-        - name: qbittorrent-downloads
+        - name: media
           persistentVolumeClaim:
             claimName: media-data
-            subPath: torrents
-        - name: amule-downloads
-          persistentVolumeClaim:
-            claimName: media-data
-            subPath: amule/incoming
+        # readOnlyRootFilesystem: true impide escribir /tmp, que curl necesita para
+        # descargar la respuesta de la API; emptyDir cubre exactamente esa necesidad.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 8Mi

@@ -21,12 +21,12 @@ spec:
             - |
               set -e
               echo "Creating media directory structure..."
-              mkdir -p /data/media/movies /data/media/tv /data/amule/incoming /data/amule/temp
+              mkdir -p /data/media/movies /data/media/tv /data/media/music /data/amule/incoming /data/amule/temp
               mkdir -p /data/torrents
 
               # Ensure torrents subdirs are symlinks to media (idempotent)
               # If a real directory exists, migrate its content then replace with symlink
-              for sub in movies tv; do
+              for sub in movies tv music; do
                 if [ -L /data/torrents/$sub ]; then
                   echo "  /data/torrents/$sub already symlink -> $(readlink /data/torrents/$sub)"
                 elif [ -d /data/torrents/$sub ]; then

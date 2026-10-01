@@ -22,7 +22,7 @@ Descarga manual por dos vías — **qBittorrent (torrent)** y **aMule (eDonkey/K
 
 ### Almacenamiento
 
-- **`media-data`**: PVC 400Gi RWX sobre `nfs-storage-v4` (GlusterFS/NFS-Ganesha, VIP `192.168.1.30`), montado en `/data` en los 3 Deployments (`files/multimedia/{qbittorrent,jellyfin,amule}.yaml:77,66,89` → `/data`). Subárboles: `/data/media/{tv,movies}` (biblioteca Jellyfin), `/data/torrents/{tv,movies}` (qBittorrent) y `/data/amule/{incoming,temp}` (aMule). Owner `1000:1000` (`abc`).
+- **`media-data`**: PVC 400Gi RWX sobre `nfs-storage-v4` (GlusterFS/NFS-Ganesha, VIP `192.168.1.30`), montado en `/data` en los 3 Deployments (`files/multimedia/{qbittorrent,jellyfin,amule}.yaml:77,66,89` → `/data`). Subárboles: `/data/media/{tv,movies,music}` (biblioteca Jellyfin), `/data/torrents/{tv,movies,music}` (qBittorrent) y `/data/amule/{incoming,temp}` (aMule). Owner `1000:1000` (`abc`).
 - **Configs**: `qbittorrent-config` 2Gi RWO `nfs-storage-v4` → `/config`, `amule-config` 2Gi RWO `nfs-storage-v4` → `/home/amule/.aMule` (móviles `eu.elarreglador/worker=true`), **jellyfin-config-local** 2Gi RWO `local-static` → `/config` (`files/multimedia/storage-local-jellyfin.yaml:11` `hostPath /srv/k8s-local/jellyfin`, `PV` por worker `k8s-worker-1/2` `Retain`, `PVC Bound` a `worker-1`). `jellyfin-config` NFS (`files/multimedia/storage.yaml:40` `nfs-storage-v4`) permanece `Bound` 22d como respaldo hasta validar el paracaídas — **no es el PVC activo de Jellyfin** (el Deployment `files/multimedia/jellyfin.yaml:36` usa `jellyfin-config-local`). `qbittorrent/amule` siguen móviles; Jellyfin es móvil con paracaídas (ver abajo). Los `local-static` de Sonarr/Radarr/Prowlarr/Jellyseerr se eliminaron el 2026-08-29 (ver git log). Gotcha SQLite `fsync ~66 ms` documentado en `incidentes/jellyfin-lentitud-20260906.md` y `files/multimedia/_retirado/`.
 - **Permisos de `/data`** (`verificado 2026-08-15`): los archivos vía NFS quedan con uid `4294967294` (squash) pero `chown 1000:1000` persiste (`abc:users`). El job `init-media-dirs` (`files/multimedia/init-media-dirs.yaml`) crea la estructura y los symlinks idempotentes (ver Flujo); reaplicar si se pierden permisos.
 
@@ -50,27 +50,45 @@ aMule WebUI  https://amule.elarreglador.eu (192.168.1.54:4711)
   |  /data/amule/incoming/tv     --symlink--> /data/media/tv       (a)
   +--> (mismo PVC y mismo CronJob que qBittorrent)
 
+aMule (música)  ficheros .mp3/.flac/.ogg/.m4a terminados en /data/amule/incoming
+  |  CronJob amule-music-organizer */29 * * * * (d): Python solo-stdlib embebido,
+  |  lee ID3v2 → ID3v1 → nombre "Artista - Título"; sin apk/pip en runtime
+  v
+/ data/media/music/<Artista>/<Álbum>/   →  Jellyfin librería "Música" (music)
+
 (a) Job init-media-dirs (files/multimedia/init-media-dirs.yaml:29) crea/mantiene los symlinks
     idempotentes; si existe un directorio real lo migra con mv -n a /data/media y lo
     reemplaza por ln -sf. Sin este paso el flujo se rompe tras un redeploy limpio.
-(b) CronJob jellyfin-auto-scan (files/multimedia/jellyfin-auto-scan.yaml:9) cada 60 min,
-    concurrencyPolicy Forbid, startingDeadline 300, activeDeadline 3300, ttl 3600,
-    imagen curlimages/curl, POST http://jellyfin:8096/Library/Refresh con API key
-    (Secret jellyfin-apikey, gitignored). NetworkPolicy media-public
-    (files/multimedia/networkpolicy-multimedia.yaml:55) permite podSelector: {} → 8096
-    intra-namespace para que el scanner alcance a Jellyfin. Sin el Cron, inotify sobre
-    nfs-ganesha no propaga eventos entre pods y Jellyfin no ve el fichero hasta su
-    ScheduledTask interna (horas). El script scripts/deploy-multimedia.sh:56
-    garantiza de forma idempotente el Secret y la fila ApiKeys
-    jellyfin-auto-scan (Job jellyfin-ensure-apikey con sqlite sobre
-    jellyfin-config, INSERT OR IGNORE, espera a que jellyfin.db exista);
+    Crea además /data/media/music y el symlink /data/torrents/music. NO crea symlink
+    de incoming/music: el organizer necesita un directorio real en incoming para
+    poder mover los ficheros fuera.
+(b) CronJob jellyfin-auto-scan (files/multimedia/jellyfin-auto-scan.yaml) cada 60 min,
+    concurrencyPolicy Forbid, startingDeadline 300, activeDeadline 600, ttl 3600,
+    imagen curlimages/curl:8.6.0, POST http://jellyfin:8096/Library/Refresh con API key
+    (Secret jellyfin-apikey, gitignored). **Cabecera obligatoria desde Jellyfin 12:
+    Authorization: MediaBrowser Token="<key>", Client=…, Device=…, Version=… — la
+    cabecera X-Emby-Token devuelve 401 (ver notas operativas).** NetworkPolicy
+    media-public (files/multimedia/networkpolicy-multimedia.yaml:55) permite
+    podSelector: {} → 8096 intra-namespace para que el scanner alcance a Jellyfin.
+    Sin el Cron, inotify sobre nfs-ganesha no propaga eventos entre pods y Jellyfin no
+    ve el fichero hasta su ScheduledTask interna (horas). El script
+    scripts/deploy-multimedia.sh garantiza de forma idempotente el Secret y la fila
+    ApiKeys jellyfin-auto-scan (Job jellyfin-ensure-apikey con sqlite sobre
+    jellyfin-config-local, INSERT OR IGNORE, espera a que jellyfin.db exista);
     si el Secret ya existe lo reutiliza, sin exponer el token en logs ni en git.
+(d) CronJob amule-music-organizer (files/multimedia/amule-music-organizer.yaml):
+    */29 * * * *, Forbid, activeDeadline 600, backoffLimit 0, imagen python:3.11-alpine,
+    runAsUser 1000, readOnlyRootFilesystem true. Clasifica el audio suelto de
+    incoming a /data/media/music/<Artista>/<Álbum> con os.replace (atómico) y es
+    idempotente. Ignora los symlinks movies/tv de incoming (os.walk followlinks=False).
+    Para lanzar una pasada sin esperar al schedule:
+      kubectl -n multimedia create job --from=cronjob/amule-music-organizer organizer-manual
 (c) BaseItems en jellyfin.db y API /Items; ver Verificación.
 ```
 
 - **qBittorrent (torrent)**: WebUI `https://torrent.elarreglador.eu` (LAN `192.168.1.58:8080`) login `elarreglador` (`/config/qBittorrent/qBittorrent.conf`). Subida `.torrent`/magnet con `savepath=/data/torrents/movies` (todo a `movies` por decisión operativa; si se categoriza `tv` va a `/data/torrents/tv → /data/media/tv`). `DefaultSavePath=/data/torrents` pero el Job garantiza que `/data/torrents/movies` y `/tv` son symlinks a `/data/media`. No hay wizard `*arr`.
 - **aMule (eDonkey/KAD)**: WebUI `https://amule.elarreglador.eu` (LAN `192.168.1.54:4711`) login `amule-secret` (`WEBUI_PWD`/`EC_PASSWORD` vía `AMULE_WEB_PWD`/`AMULE_EC_PWD` en `deploy-multimedia.sh`). `IncomingDir=/data/amule/incoming`, `TempDir=/data/amule/temp` (`amule.conf` o WebUI → Preferences). Mismo mecanismo de symlinks `.../incoming/movies → /data/media/movies` y `.../tv → /data/media/tv`; el Cron es común.
-- **Jellyfin**: `https://jellyfin.elarreglador.eu` (LAN `192.168.1.53:8096`), usuario `elarreglador` (admin), librerías `Movies` → `/data/media/movies` y `TV Shows` → `/data/media/tv` (verificado 2026-08-15). Solo indexa `/data/media`.
+- **Jellyfin**: `https://jellyfin.elarreglador.eu` (LAN `192.168.1.53:8096`), usuario `elarreglador` (admin), librerías `Películas` → `/data/media/movies`, `Series` → `/data/media/tv`, **`Música` → `/data/media/music`** y `Collections` (boxsets, en el propio config). Solo indexa `/data/media`. Las librerías las declara el Job `jellyfin-init-libraries` (`files/multimedia/jellyfin-libraries.yaml`) vía `POST /Library/VirtualFolders`: espera la API con el token del Secret, y si no hay ninguna librería sobre `/data/media/music` la crea; si ya existe, no hace nada (idempotente) y si el token es inválido **falla en voz alta**. `deploy-multimedia.sh` lo aplica tras el rollout de Jellyfin y tras `jellyfin-ensure-apikey`. **No editar `library.xml`**: Jellyfin ≥10.9 lo ignora y no existe tal fichero (verificado 2026-10-01).
 - **Retirados (2026-08-29)**: cadena automática `Jellyseerr → Sonarr/Radarr → Prowlarr → FlareSolverr + es-badge` eliminada. `scripts/_retirado/multimedia-wizard.sh`, `multimedia-language.sh`/`multimedia-verify.sh` y manifiestos `files/multimedia/_retirado/...` conservados por histórico. No hay indexadores ni búsqueda automática.
 
 #### Verificación (`verificado 2026-08-31`)
@@ -87,9 +105,31 @@ kubectl -n multimedia logs job/jellyfin-auto-scan-manual  # → HTTP 204 Scan tr
 
 # Jellyfin indexa (BaseItems y API)
 kubectl -n multimedia exec deploy/jellyfin -- sqlite3 /config/data/data/jellyfin.db "SELECT Name,Path FROM BaseItems WHERE Path LIKE '%TEST%'"
-# o vía API (con API key del Secret)
-curl -H "X-Emby-Token: $KEY" "http://jellyfin:8096/Items?Recursive=true&SearchTerm=TEST"  # → TotalRecordCount 1, MovieCount 3→2 tras rm + rescan
+# o vía API (API key del Secret + cabecera Authorization: X-Emby-Token da 401 en Jellyfin 12)
+KEY=$(kubectl -n multimedia get secret jellyfin-apikey -o jsonpath='{.data.token}' | base64 -d)
+kubectl -n multimedia exec pod/multimedia-tools -- curl -s \
+  -H "Authorization: MediaBrowser Token=$KEY, Client=cli, Device=cli, Version=1.0" \
+  "http://jellyfin:8096/Items?Recursive=true&SearchTerm=TEST"  # → TotalRecordCount 1, MovieCount 3→2 tras rm + rescan
+
+# Librerías reales declaradas (única fuente de verdad; library.xml no existe)
+kubectl -n multimedia exec pod/multimedia-tools -- curl -s \
+  -H "Authorization: MediaBrowser Token=$KEY, Client=cli, Device=cli, Version=1.0" \
+  http://jellyfin:8096/Library/VirtualFolders   # → Collections, Música, Películas, Series
+
+# Música: clasificación automática aMule → Artista/Álbum (sin esperar al schedule)
+kubectl -n multimedia create job --from=cronjob/amule-music-organizer organizer-manual
+kubectl -n multimedia wait --for=condition=complete job/organizer-manual --timeout=120s
+kubectl -n multimedia logs job/organizer-manual        # → MOVIDO: <fichero> -> <Artista>/<Álbum> [tags|filename]
+kubectl -n multimedia exec deploy/amule -- find /data/media/music
+
+# Reconciliar la librería de música (idempotente; falla en voz alta si el token es inválido)
+kubectl -n multimedia delete job jellyfin-init-libraries --ignore-not-found
+cat files/multimedia/jellyfin-libraries.yaml | kubectl apply -f -
+kubectl -n multimedia wait --for=condition=complete job/jellyfin-init-libraries --timeout=360s
+kubectl -n multimedia logs job/jellyfin-init-libraries
 ```
+
+Prueba de música (`verificado 2026-10-01`): `amule-music-organizer-manual-2` → `Complete 1/1 5s`, `MOVIDO: Elvis Presley - Jailhouse Rock.mp3 -> Elvis Presley/Unknown Album [tags]` y `MOVIDO: The Beatles - Yesterday.mp3 -> The Beatles/Unknown Album [filename]`, y `GET /Items?recursive=true&includeItemTypes=Audio,MusicAlbum,MusicArtist` → `6` ítems (`MusicArtist "Elvis Presley"`, `MusicArtist "The Beatles"`, `Audio "Jailhouse Rock"`, …). Detalle en `incidentes/jellyfin-musica-aMule-20261001.md`.
 
 Prueba con fichero dummy 5 MiB `TEST_Video_Libre_2026-08-31.avi` (cabecera válida copiada de avi existente) creado en `/data/torrents/movies` vía `qbittorrent` pod: `MovieCount 2→3` y `TotalRecordCount 1` tras el `POST /Library/Refresh`; tras `rm` y nuevo scan `Total 0, MovieCount 2`. La misma cadena aplica a aMule (`/data/amule/incoming/movies → /data/media/movies`).
 
@@ -407,7 +447,9 @@ Chat de Telegram con IA local (`@Dlab_assistant_bot`) que responde preguntas sob
 - **Alertas firing por diseño**: `TargetDown`, `etcdMembersDown`, `etcdInsufficientMembers` (targets `kube-etcd`/`kube-scheduler`/`kube-controller-manager`/`kube-proxy` no exponen métricas en los puertos por defecto en LXC) y `Watchdog` (centinela). La cadena principal (kubelet, apiserver, coredns, node-exporter, hosts) está **up**.
 - **Credenciales**: nunca en el repo. Grafana → usuario `elarreglador` (garantizado por `scripts/grafana-user.sh`; passwords en `info_sensible/grafana-user.env`, gitignored) y `admin` (Secret `kube-prometheus-stack-grafana`). Clave web / secretos → `info_sensible/` (gitignored).
 - **sudo en DV0/D1/D2** (`verificado 2026-08-18`): el usuario `elarreglador` tiene `NOPASSWD: ALL` vía `/etc/sudoers.d/elarreglador-nopasswd` (antes solo `poweroff`/`systemctl`/`true` sin password). Se amplió para poder instalar/administrar agentes de monitoreo y gestionar unidades systemd remotas por SSH sin TTY. La password de sudo (no va al repo) sigue siendo la que define el señor en cada máquina.
-- **CNI Calico — tokens de `calico-kubeconfig`** (`verificado 2026-09-06` con `ssh D1 "lxc exec k8s-master-1 -- cat /etc/cni/net.d/calico-kubeconfig"` y `kubectl -n kube-system get secret calico-cni-plugin-token -o yaml`): el token original del SA `calico-cni-plugin` usado por el plugin CNI en los 4 nodos (`/etc/cni/net.d/calico-kubeconfig`) **expiró** (BoundServiceAccountToken con `expirationSeconds` — el emitido por kubeadm el 2026-08-01 caducó a las 24 h y todos los pods nuevos fallaban con `error getting ClusterInformation: ... Unauthorized`). Mitigación aplicada: Secret legacy `calico-cni-plugin-token` (`type: kubernetes.io/service-account-token`, anotación `kubernetes.io/service-account.name: calico-cni-plugin`) que genera un JWT **sin `exp`/`iat`** (verificado `2026-09-06`: payload sin `exp`, `iss: kubernetes/serviceaccount`, `sub: system:serviceaccount:kube-system:calico-cni-plugin`) — larga duración sin expiración automática. Se reescribió el campo `token:` de ese kubeconfig en los 4 nodos (`/etc/cni/net.d/calico-kubeconfig` en `k8s-master-1/2`, `k8s-worker-1/2` verificado 2026-09-06) y el rollout de Radarr completó; segunda rotación el 2026-08-29 por reinstalación del CNI. **Si vuelve `FailedCreatePodSandBox` por Calico**, verificar que el kubeconfig aún contiene el token del Secret legacy (`kubectl -n kube-system get secret calico-cni-plugin-token -o jsonpath='{.data.token}'` vs `cat /etc/cni/net.d/calico-kubeconfig | grep token` en cada nodo) y re-aplicar el procedimiento de `03-Aplicaciones.md` previo. A largo plazo, migrar a `TokenRequest` proyectado con rotación automática.
+- **CNI Calico — tokens de `calico-kubeconfig`** (`verificado 2026-09-06` con `ssh D1 "lxc exec k8s-master-1 -- cat /etc/cni/net.d/calico-kubeconfig"` y `kubectl -n kube-system get secret calico-cni-plugin-token -o yaml`): el token original del SA `calico-cni-plugin` usado por el plugin CNI en los 4 nodos (`/etc/cni/net.d/calico-kubeconfig`) **expiró** (BoundServiceAccountToken con `expirationSeconds` — el emitido por kubeadm el 2026-08-01 caducó a las 24 h y todos los pods nuevos fallaban con `error getting ClusterInformation: ... Unauthorized`). Mitigación aplicada: Secret legacy `calico-cni-plugin-token` (`type: kubernetes.io/service-account-token`, anotación `kubernetes.io/service-account.name: calico-cni-plugin`) que genera un JWT **sin `exp`/`iat`** (verificado `2026-09-06`: payload sin `exp`, `iss: kubernetes/serviceaccount`, `sub: system:serviceaccount:kube-system:calico-cni-plugin`) — larga duración sin expiración automática. Se reescribió el campo `token:` de ese kubeconfig en los 4 nodos (`/etc/cni/net.d/calico-kubeconfig` en `k8s-master-1/2`, `k8s-worker-1/2` verificado 2026-09-06) y el rollout de Radarr completó; segunda rotación el 2026-08-29 por reinstalación del CNI. **Tercera rotación el 2026-10-01**: el token caducó otra vez, esta vez solo en `k8s-worker-1` y `k8s-master-1` (`sha256` del kubeconfig `a5197bd6…` en los 4 nodos tras corregir; `3de67e10…` el caducado en worker-1). Sintoma: los pods nuevos en esos nodos se quedaban en `ContainerCreating` con `FailedCreatePodSandBox … calico … error getting ClusterInformation: connection is unauthorized: Unauthorized`. Procedimiento aplicado: copia `calico-kubeconfig.bak-<timestamp>` + sustituir el campo `token:` por el del Secret, verificando con `sha256sum` que los 4 nodos coinciden. Los kubeconfig eran idénticos byte a byte salvo el token. No requiere reiniciar `calico-node` ni los pods en marcha (su sandbox ya existe); sí hay que **rotar los 4 nodos cada vez**, porque los tokens se van desincronizando por pares. Diagnóstico rápido: `kubectl -n multimedia get cronjob` y, si un Job nuevo no arranca, `kubectl describe pod <pod> | sed -n '/Events:/,$p'` antes de culpar al manifiesto o a la PVC. **Si vuelve `FailedCreatePodSandBox` por Calico**, verificar que el kubeconfig aún contiene el token del Secret legacy (`kubectl -n kube-system get secret calico-cni-plugin-token -o jsonpath='{.data.token}'` vs `cat /etc/cni/net.d/calico-kubeconfig | grep token` en cada nodo) y re-aplicar el procedimiento de `03-Aplicaciones.md` previo. A largo plazo, migrar a `TokenRequest` proyectado con rotación automática.
+- **Jellyfin 12 — autenticación por API key** (`verificado 2026-10-01` con `jellyfin 12.1.0`): la cabecera **`X-Emby-Token` ya no se acepta** para API keys y devuelve `401`; hay que usar el esquema completo `Authorization: MediaBrowser Token="<key>", Client="…", Device="…", Version="…"`. Medido sobre el mismo token y el mismo endpoint `/System/Info`: `X-Emby-Token` → `401`, `X-Emby-Token` + `X-Emby-Client/Device-Name/Device-Id/Client-Version` → `401`, `Authorization: MediaBrowser Token=…` → `200`. Los CronJobs que hablean con la API (`jellyfin-auto-scan`, `jellyfin-init-libraries`) ya usan la cabecera correcta. Ojo al diagnosticar: un `401` puede ser **cambio de versión de la API** o token caducado, indistinguibles por el código. Verificar el token contra la tabla `ApiKeys` de `jellyfin.db` ( legible en el host: `lxc exec k8s-worker-1 -- python3 -c "import sqlite3;print(list(sqlite3.connect('file:/srv/k8s-local/jellyfin/data/data/jellyfin.db?mode=ro',uri=True).execute('SELECT Name,AccessToken FROM ApiKeys')))"` ) y compararlo con `kubectl -n multimedia get secret jellyfin-apikey -o jsonpath='{.data.token}' | base64 -d`.
+- **Jellyfin — `POST /Library/VirtualFolders` usa parámetros de QUERY**, no cuerpo JSON (`verificado 2026-10-01`): `curl -X POST "http://jellyfin:8096/Library/VirtualFolders?name=Música&collectionType=music&paths=/data/media/music&refreshLibrary=false"`. Un cuerpo JSON válido devuelve `400 {"name":["The name field is required."]}` porque `name` se enlaza desde la query string. Comprobar siempre el estado real con `GET /Library/VirtualFolders`.
 - **Scripts útiles** (`scripts/`): `deploy-landing.sh`, `deploy-multimedia.sh` (stack simplificado Jellyfin+qBittorrent+aMule; opcionales `AMULE_WEB_PWD`/`AMULE_EC_PWD`), `multimedia-expose-torrent.sh` (exposición 6881), `amule-expose-p2p.sh` (exposición 4662/4672/4665), `install-multimedia-backup.sh`/`backup-multimedia.sh` (3 apps), `deploy-nodered.sh` (`NODERED_PASSWORD`), `deploy-mariadb.sh` (`MARIADB_*_PASSWORD`), `deploy-telegram-bot.sh` (`TELEGRAM_*`), `deploy-sdr.sh`, `deploy-ollama.sh`, `grafana-user.sh`, `ensure-public-dashboard.sh`, `computer_info.sh`. Retirados a `scripts/_retirado/`: `multimedia-wizard.sh`, `multimedia-language.sh`, `multimedia-verify.sh`.
 
 ## Referencias

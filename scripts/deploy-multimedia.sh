@@ -149,6 +149,11 @@ for app in qbittorrent jellyfin amule; do
 done
 
 echo
+echo "[3/5] Configurando CronJob amule-music-organizer (música aMule -> /data/media/music)..."
+cat "$MM/amule-music-organizer.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+echo "  CronJob amule-music-organizer aplicado (*/29 * * * *, Forbid, activeDeadline 600s)"
+
+echo
 echo "[4/5] Aplicando NetworkPolicies, Certificados e Ingress (jellyfin/qbittorrent/amule públicos)..."
 cat "$MM/networkpolicy-multimedia.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 cat "$MM/networkpolicy-acme-http01.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
@@ -159,7 +164,7 @@ cat "$MM/ingress-qbittorrent.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 cat "$MM/certificate-amule.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 cat "$MM/ingress-amule.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 cat "$MM/jellyfin-auto-scan.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
-echo "  CronJob jellyfin-auto-scan aplicado (0 * * * *, Forbid, activeDeadline 3300s)"
+echo "  CronJob jellyfin-auto-scan aplicado (0 * * * *, Forbid, activeDeadline 600s)"
 if [ -f "$MM/jellyfin-backup.yaml" ]; then
   cat "$MM/jellyfin-backup.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
   echo "  CronJob jellyfin-db-backup aplicado (lunes/jueves 03:00, recortado 8M, 2 meses)"
@@ -171,6 +176,19 @@ ssh "$KUBECTL_HOST" "kubectl -n $NS rollout status deploy/qbittorrent --timeout=
 ssh "$KUBECTL_HOST" "kubectl -n $NS rollout status deploy/jellyfin --timeout=300s"
 ssh "$KUBECTL_HOST" "kubectl -n $NS rollout status deploy/amule --timeout=300s"
 
+# Declarar librerías vía API. Va después del rollout porque necesita la API de Jellyfin
+# en pie, y después de jellyfin-ensure-apikey (step 3) porque usa su API key.
+echo
+echo "[5/5] Declarando librerías en Jellyfin (POST /Library/VirtualFolders)..."
+ssh "$KUBECTL_HOST" "kubectl -n $NS delete job jellyfin-init-libraries --ignore-not-found >/dev/null 2>&1 || true"
+cat "$MM/jellyfin-libraries.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+if ssh "$KUBECTL_HOST" "kubectl -n $NS wait --for=condition=complete job/jellyfin-init-libraries --timeout=360s" 2>/dev/null; then
+  ssh "$KUBECTL_HOST" "kubectl -n $NS logs job/jellyfin-init-libraries" 2>&1 | grep -v -i "token=" | head -n 20
+else
+  echo "  AVISO: jellyfin-init-libraries no completó; revisa 'kubectl -n $NS describe job jellyfin-init-libraries'"
+  ssh "$KUBECTL_HOST" "kubectl -n $NS logs job/jellyfin-init-libraries" 2>&1 | grep -v -i "token=" | head -n 20 || true
+fi
+
 echo
 echo "OK: stack multimedia simplificado desplegado en el namespace '$NS'"
 echo
@@ -181,6 +199,8 @@ echo "  curl -s -o /dev/null -w '%{http_code}' https://jellyfin.elarreglador.eu/
 echo "  curl -s -o /dev/null -w '%{http_code}' https://torrent.elarreglador.eu/   (login qBittorrent)"
 echo "  curl -s -o /dev/null -w '%{http_code}' https://amule.elarreglador.eu/     (login amuleweb)"
 echo "  kubectl -n $NS get certificate"
+echo "  kubectl -n $NS get cronjob"
+echo "  kubectl -n $NS logs job/amule-music-organizer-<ts>   # qué canciones se han movido"
 echo
 echo "Notas:"
 echo "  - qBittorrent WebUI: subir .torrent/magnet por UI (login propio, no necesita wizard)"

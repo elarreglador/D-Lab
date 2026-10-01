@@ -1,10 +1,17 @@
+# Dispara un escaneo de todas las librerías de Jellyfin cada hora.
+#
+# Autenticación: desde Jellyfin 12 la cabecera X-Emby-Token ya NO se acepta para
+# API keys y devuelve 401; hay que usar el esquema completo
+# Authorization: MediaBrowser Token="<key>", Client=..., Device=..., Version=...
+# (verificado 2026-10-01 sobre jellyfin 12.1.0: X-Emby-Token -> 401,
+#  Authorization: MediaBrowser Token=... -> 200 con el mismo token).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: jellyfin-auto-scan
   namespace: multimedia
   labels:
-    app.kubernetes.io/part-of: multimedia
+    app: jellyfin
 spec:
   schedule: "0 * * * *"
   concurrencyPolicy: Forbid
@@ -13,23 +20,27 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
-      activeDeadlineSeconds: 3300
+      activeDeadlineSeconds: 600
       backoffLimit: 0
       ttlSecondsAfterFinished: 3600
       template:
         metadata:
           labels:
+            app: jellyfin
             app.kubernetes.io/part-of: multimedia
         spec:
           restartPolicy: Never
+          nodeSelector:
+            eu.elarreglador/worker: "true"
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
+            runAsGroup: 1000
             seccompProfile:
               type: RuntimeDefault
           containers:
             - name: jellyfin-scanner
-              image: curlimages/curl:latest
+              image: curlimages/curl:8.6.0
               env:
                 - name: JELLYFIN_API_KEY
                   valueFrom:
@@ -41,8 +52,14 @@ spec:
                 capabilities:
                   drop:
                     - ALL
-                readOnlyRootFilesystem: false
-                runAsNonRoot: true
+                readOnlyRootFilesystem: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 32Mi
+                limits:
+                  cpu: 500m
+                  memory: 128Mi
               command:
                 - /bin/sh
                 - -c
@@ -51,45 +68,59 @@ spec:
                   echo "=========================================="
                   echo "Jellyfin Auto Scan (CronJob) - $(date)"
                   echo "=========================================="
-                  
+
                   JELLYFIN_URL="http://jellyfin:8096"
-                  
-                  # Wait for Jellyfin API (with API key)
-                  echo "Waiting for Jellyfin API..."
+                  AUTH="Authorization: MediaBrowser Token=$JELLYFIN_API_KEY, Client=auto-scan, Device=auto-scan, Version=1.0"
+
+                  echo "Esperando a la API de Jellyfin..."
+                  READY=no
                   for i in $(seq 1 30); do
-                    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -H "X-Emby-Token: $JELLYFIN_API_KEY" "$JELLYFIN_URL/System/Info" || echo "000")
-                    if [ "$RESPONSE" = "200" ] || [ "$RESPONSE" = "401" ]; then
-                      echo "Jellyfin API is ready (HTTP $RESPONSE)"
-                      break
-                    fi
-                    echo "  Attempt $i/30 - waiting... (HTTP $RESPONSE)"
-                    sleep 2
-                    if [ "$i" = "30" ]; then
-                      echo "Jellyfin API not ready after 60s, exiting"
-                      exit 1
-                    fi
+                    CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "$AUTH" "$JELLYFIN_URL/System/Info" || echo 000)
+                    case "$CODE" in
+                      200)
+                        READY=yes
+                        echo "API lista (intento $i/30)"
+                        break
+                        ;;
+                      401|403)
+                        echo "ERROR: token del Secret jellyfin-apikey rechazado (HTTP $CODE)."
+                        echo "      Re-registrar con el Job jellyfin-ensure-apikey y reintentar."
+                        exit 1
+                        ;;
+                      *)
+                        echo "  Attempt $i/30 - esperando... (HTTP $CODE)"
+                        sleep 2
+                        ;;
+                    esac
                   done
-                  
-                  # Trigger library scan (requires API key)
-                  echo ""
-                  echo "Triggering library scan for all libraries..."
-                  SCAN_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-                    "$JELLYFIN_URL/Library/Refresh" \
-                    -H "Content-Type: application/json" \
-                    -H "X-Emby-Token: $JELLYFIN_API_KEY" || echo -e "\n000")
-                  
-                  HTTP_CODE=$(echo "$SCAN_RESPONSE" | tail -1)
-                  BODY=$(echo "$SCAN_RESPONSE" | head -n -1)
-                  
-                  if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
-                    echo "Scan triggered successfully (HTTP $HTTP_CODE)"
-                  else
-                    echo "Failed to trigger scan (HTTP $HTTP_CODE)"
-                    echo "Response: $BODY"
+                  if [ "$READY" != "yes" ]; then
+                    echo "ERROR: la API de Jellyfin no respondió 200 en 60s (último código $CODE)"
                     exit 1
                   fi
-                  
-                  echo ""
-                  echo "Scan trigger completed at $(date)"
-                  echo "Jellyfin will index new files in background"
+
+                  echo "Lanzando escaneo de todas las librerías..."
+                  SCAN_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+                    -H "$AUTH" \
+                    -H "Content-Type: application/json" \
+                    "$JELLYFIN_URL/Library/Refresh" || printf '\n000')
+
+                  HTTP_CODE=$(echo "$SCAN_RESPONSE" | tail -1)
+                  BODY=$(echo "$SCAN_RESPONSE" | head -n -1)
+
+                  case "$HTTP_CODE" in
+                    204|200)
+                      echo "Escaneo lanzado correctamente (HTTP $HTTP_CODE)"
+                      ;;
+                    401|403)
+                      echo "ERROR: escaneo rechazado por autenticación (HTTP $HTTP_CODE)"
+                      exit 1
+                      ;;
+                    *)
+                      echo "ERROR: POST /Library/Refresh devolvió HTTP $HTTP_CODE"
+                      echo "Respuesta: $BODY"
+                      exit 1
+                      ;;
+                  esac
+
+                  echo "Jellyfin indexará los ficheros nuevos en segundo plano."
                   echo "=========================================="
