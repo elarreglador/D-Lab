@@ -10,9 +10,8 @@
 #   kubectl apply -f files/multimedia/media-compress-test.yaml
 #   kubectl -n multimedia wait --for=condition=complete job/media-compress-test --timeout=8h
 #   kubectl -n multimedia logs job/media-compress-test -f
-#   # Con película concreta (override):
-#   kubectl -n multimedia create job media-compress-test-manual --from=cronjob/media-compress-test  # no aplica, es Job
-#   # o editar env TARGET_FILE=/data/media/movies/Nombre.mkv y reaplicar
+#   # Con película concreta (override): poner la ruta en env TARGET_FILE y reaplicar,
+#   # p. ej. TARGET_FILE="/data/media/movies/<nombre>.mkv"
 # Requisitos: PVC media-data RWX nfs-storage-v4 (VIP 192.168.1.30), imagen jrottenberg/ffmpeg:6-alpine
 apiVersion: batch/v1
 kind: Job
@@ -49,11 +48,14 @@ spec:
       containers:
         - name: compress-test
           image: jrottenberg/ffmpeg:6-alpine
-          # Película fijada para prueba: Akira 1080p H.264 3.0G (representativa, encode rápido ~2h/variante)
-          # Si quiere probar otra, cambie value y reaplique (p.ej. Batman.Begins 5.9G para stress test)
+          # Película objetivo. Vacío a propósito: el script usa entonces la primera
+          # película >3GiB que encuentre en /data/media/movies (ver más abajo el bloque
+          # "Selección de fichero objetivo"), así no hay que fijar un título concreto
+          # ni actualizar el manifiesto cuando cambie la biblioteca.
+          # Para fijar una en concreto: pon aquí su ruta absoluta y reaplica.
           env:
             - name: TARGET_FILE
-              value: "/data/media/movies/Akira.Edicion.30.Aniversario.(Spanish.Japanese.Subs).HD.1080p.x264-AC3.by.Geot.mkv"
+              value: ""
           resources:
             requests:
               cpu: 1000m
