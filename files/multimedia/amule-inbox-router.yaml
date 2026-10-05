@@ -1,0 +1,288 @@
+# Enruta las descargas TERMINADAS de aMule desde la raíz del inbox a la librería de Películas.
+#
+# Por qué existe (incidente 2026-10-05):
+#   La WebUI de aMule tiene un desplegable "Carpeta de destino" cuyo valor por defecto es
+#   IncomingDir, es decir la RAÍZ de /data/amule/incoming. Si no se elige a mano la
+#   subcarpeta `movies` (que init-media-dirs crea como symlink a /data/media/movies), el
+#   fichero queda en la raíz y Jellyfin no lo ve nunca: la librería "Películas" apunta a
+#   /data/media/movies y /Library/Refresh sólo reindexa esa ruta. Resultado: descargas
+#   invisibles con el escaneo automático funcionando perfectamente.
+#
+#   Este CronJob elimina la dependencia de recordar ese paso: normaliza cualquier fichero
+#   de vídeo suelto en la raíz del inbox al nombre "Título (Año).ext" y lo mueve a la
+#   librería. Es idempotente y agnóstico de lo que se elija en la WebUI.
+#
+# Relación con amule-music-organizer (*/29 * * * *): aquel mueve el AUDIO suelto a
+# /data/media/music. Este mueve el VÍDEO. Cada uno filtra por extensión, así que no se pisan.
+#
+# Seguranza frente a descargas a medias: aMule escribe el fichero parcial como .part en
+# AMULE_TEMP y al terminar hace un rename atómico a IncomingDir. O se ve el fichero
+# completo o no se ve; nunca está a medio escribir en el inbox.
+#
+# Sin dependencias: solo librería estándar de Python. No hay `apk add` ni `pip install` en
+# tiempo de ejecución, de modo que el pod puede llevar readOnlyRootFilesystem: true y
+# seguir siendo autónomo aunque no tenga red.
+#
+# Programación: */10 mueve lo pendiente cada 10 min; jellyfin-auto-scan (0 * * * *)
+# reindexa a la hora. Latencia total de la descarga a la pantalla: entre 1 y 70 minutos.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: amule-inbox-router
+  namespace: multimedia
+  labels:
+    app.kubernetes.io/part-of: multimedia
+spec:
+  schedule: "*/10 * * * *"
+  # Sin spec.timezone: este clúster no tiene activo el feature gate CronJobTimeZone
+  # (K8s >= 1.27) y el API server rechaza el campo. Irrelevante aquí: */10 y 0 * * * *
+  # dan el mismo resultado en UTC que en Europe/Madrid.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 600
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: multimedia
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            eu.elarreglador/worker: "true"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: router
+              image: python:3.11-alpine
+              env:
+                - name: AMULE_INCOMING
+                  value: "/data/amule/incoming"
+                - name: MOVIES_ROOT
+                  value: "/data/media/movies"
+                - name: TZ
+                  value: Europe/Madrid
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+                readOnlyRootFilesystem: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              command:
+                - python3
+                - -c
+              args:
+                - |
+                  import os
+                  import re
+                  import shutil
+                  import sys
+                  from pathlib import Path
+
+                  VIDEO_EXT = {
+                      ".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".mpg", ".mpeg",
+                      ".m2ts", ".ts", ".vob", ".ogm", ".ogx", ".divx", ".xvid", ".rm",
+                      ".rmvb", ".asf", ".3gp", ".flv", ".webm", ".mxf",
+                  }
+
+                  # Tokens que nunca pertenecen a un título de película: calidad, resolución,
+                  # códec, idioma, proveedor o etiqueta de grupo de release.
+                  # En minúsculas y sin puntuación, porque se comparan token a token.
+                  TECH_TOKENS = {
+                      # fuente / calidad
+                      "bdrip", "brrip", "dvdrip", "hdrip", "webrip", "web", "webdl",
+                      "hdtv", "dvd", "bluray", "bd", "remux", "cam", "telesync",
+                      "screener", "workprint", "korsub", "hc", "hq", "dvd5", "dvd9", "rip",
+                      # resolución
+                      "480p", "540p", "576p", "720p", "1080p", "1080i", "1440p", "2160p",
+                      "4k", "uhd", "8k", "fhd", "hd", "sd",
+                      # códecs
+                      "x264", "x265", "h264", "h265", "hevc", "avc", "xvid", "divx",
+                      "mpeg2", "vc1", "theora", "av1", "vp9", "aac", "ac3", "eac3", "dd",
+                      "ddp", "dts", "dtshd", "truehd", "atmos", "flac", "mp3", "opus", "pcm",
+                      "dd51", "dd70", "6ch", "2ch", "51", "70",
+                      # idioma / audio
+                      "ita", "eng", "esp", "lat", "spa", "fre", "ger", "por", "cat",
+                      "und", "vost", "sub", "subs", "dual", "multi", "dub", "dubbed",
+                      "subbed", "castellano", "ingles", "espanol", "spanish", "english",
+                      # edición / proveedor
+                      "hdts", "remastered", "remasteriz", "remasterizada", "proper",
+                      "repack", "limited", "extended", "unrated", "imax", "complete",
+                      "coloc", "telecine", "netflix", "amazon", "hulu", "disney", "hbo",
+                      "max", "paramount", "peacock", "apple", "tv",
+                      # dominio
+                      "www", "com", "org", "net", "info",
+                  }
+                  STOP_TOKENS = {"by", "and"}
+
+                  # El año va primero entre paréntesis ("... (AAAA) ...") y sólo si no lo hay
+                  # se busca uno suelto. El orden importa: cuando el título es un número de
+                  # cuatro cifras y hay otro año entre paréntesis, el año es el de los
+                  # paréntesis y el número es el título, no al revés.
+                  YEAR_BRACKET = re.compile(r"[\(\[]\s*((?:19|20)\d{2})\s*[\)\]]")
+                  YEAR_LOOSE = re.compile(r"\b((?:19|20)\d{2})\b")
+                  PAREN_CUT = re.compile(r"[\(\[]")
+                  BAD_CHARS = re.compile(r'[\\/:*?"<>|]')
+                  MAX_LEN = 120
+
+                  inbox = Path(os.environ["AMULE_INCOMING"])
+                  movies_root = Path(os.environ["MOVIES_ROOT"])
+
+                  def parse_release_name(stem):
+                      """Extrae (titulo, anio) de un nombre de release de eDonkey."""
+                      text = stem.replace("_", " ")
+                      year = None
+
+                      match = YEAR_BRACKET.search(text)
+                      if match:
+                          year = match.group(1)
+                          text = text[:match.start()] + " " + text[match.end():]
+                      else:
+                          match = YEAR_LOOSE.search(text)
+                          if match:
+                              year = match.group(1)
+                              text = text[:match.start()] + " " + text[match.end():]
+
+                      text = re.sub(r"[\(\[]\s*[\)\]]", " ", text)
+                      text = re.sub(r"\s{2,}", " ", text)
+                      text = re.sub(r"^[\s\-_.\)\]]+|[\s\-_.\)\]]+$", "", text)
+
+                      # Lo que va tras el primer paréntesis es etiqueta: los releases de
+                      # eDonkey meten ahí idioma, fuente y códec.
+                      cut = PAREN_CUT.search(text)
+                      if cut and text[:cut.start()].strip():
+                          text = text[:cut.start()]
+
+                      words = []
+                      for token in re.split(r"[.\s_\-]+", text):
+                          low = token.lower().strip("()[]")
+                          if not low:
+                              continue
+                          if low in STOP_TOKENS or low in TECH_TOKENS:
+                              break
+                          # Un número suelto sólo corta el título si ya hay palabras antes;
+                          # si fuera el primero, es el título: hay películas que se llaman
+                          # solo con un número, con o sin año.
+                          if low.isdigit() and len(low) >= 3:
+                              if words:
+                                  break
+                              words.append(token)
+                              continue
+                          words.append(BAD_CHARS.sub("", token))
+
+                      title = re.sub(r"\s{2,}", " ", " ".join(words)).strip()
+                      if not title:
+                          return None, None
+                      title = " ".join(w[0].upper() + w[1:] for w in title.split(" "))
+                      # Si el año es el título entero ("AAAA (AAAA)") no aporta nada.
+                      if year and year in title:
+                          year = None
+                      return title[:MAX_LEN].strip(" ."), year
+
+                  def resolve_target(directory, name, size):
+                      """Devuelve (destino, motivo_de_sufijo) evitando sobrescribir."""
+                      stem, dot, ext = name.partition(".")
+                      candidate = directory / name
+                      if not candidate.exists() and not candidate.is_symlink():
+                          return candidate, None
+                      try:
+                          if candidate.stat().st_size == size:
+                              return None, "ya movido"
+                      except OSError:
+                          pass
+                      index = 2
+                      while True:
+                          candidate = directory / "{}-{}{}{}".format(stem, index, dot, ext)
+                          if not candidate.exists():
+                              return candidate, "colision"
+                          index += 1
+
+                  if not inbox.is_dir():
+                      print("ERROR: {} no existe".format(inbox))
+                      sys.exit(1)
+                  if not movies_root.is_dir():
+                      print("ERROR: {} no existe (revisa init-media-dirs)".format(movies_root))
+                      sys.exit(1)
+
+                  moved = 0
+                  skipped = 0
+                  failed = 0
+                  print("Enrutando video de {} hacia {}".format(inbox, movies_root))
+
+                  for root, dirs, files in os.walk(inbox, followlinks=False):
+                      dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
+                      for name in sorted(files):
+                          path = Path(root) / name
+                          if path.is_symlink() or path.suffix.lower() not in VIDEO_EXT:
+                              continue
+                          if name.endswith(".part") or name.startswith("."):
+                              continue
+
+                          try:
+                              size = path.stat().st_size
+                          except OSError as exc:
+                              print("  ERROR stat {}: {}".format(name, exc))
+                              failed += 1
+                              continue
+                          if size == 0:
+                              print("  SALTADO (vacio): {}".format(name))
+                              skipped += 1
+                              continue
+
+                          title, year = parse_release_name(path.stem)
+                          if title:
+                              new_name = "{} ({}){}".format(title, year, path.suffix) if year \
+                                  else "{}{}".format(title, path.suffix)
+                          else:
+                              new_name = name
+                              print("  AVISO: nombre no interpretable, se conserva tal cual")
+
+                          target, reason = resolve_target(movies_root, new_name, size)
+                          if target is None:
+                              print("  SALTADO [{}]: {}".format(reason, name))
+                              skipped += 1
+                              continue
+
+                          try:
+                              # rename dentro del mismo NFS: instantáneo, no copia el
+                              # contenido. Es la razón por la que mover 14 GB cuesta
+                              # segundos y no horas.
+                              os.replace(path, target)
+                          except OSError:
+                              try:
+                                  shutil.move(str(path), str(target))
+                              except OSError as exc:
+                                  print("  ERROR moviendo {}: {}".format(name, exc))
+                                  failed += 1
+                                  continue
+
+                          moved += 1
+                          note = " [{}]".format(reason) if reason else ""
+                          print("  MOVIDO: {} -> {}{}".format(name, target.name, note))
+
+                  print("Resumen: {} movidos, {} saltados, {} errores".format(
+                      moved, skipped, failed))
+                  sys.exit(1 if failed else 0)
+              volumeMounts:
+                - name: media
+                  mountPath: /data
+          volumes:
+            - name: media
+              persistentVolumeClaim:
+                claimName: media-data

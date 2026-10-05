@@ -48,7 +48,16 @@ aMule WebUI  https://amule.elarreglador.eu (192.168.1.54:4711)
   |  IncomingDir=/data/amule/incoming, TempDir=/data/amule/temp
   |  /data/amule/incoming/movies --symlink--> /data/media/movies   (a)
   |  /data/amule/incoming/tv     --symlink--> /data/media/tv       (a)
-  +--> (mismo PVC y mismo CronJob que qBittorrent)
+  +--> /data/amule/incoming (mismo PVC que qBittorrent)
+  |      CronJob amule-inbox-router */10 * * * * (e) enruta el vídeo a /data/media/movies
+  |      CronJob amule-music-organizer */29 * * * * (d) enruta el audio a /data/media/music
+  +--> CronJob jellyfin-auto-scan 0 * * * * (b) → POST /Library/Refresh (mismo que qBittorrent)
+
+aMule (películas)  ficheros .mkv/.avi/… terminados en /data/amule/incoming
+  |  CronJob amule-inbox-router */10 * * * * (e): Python solo-stdlib embebido;
+  |  renombra a "Título (Año).ext" y mueve a /data/media/movies con os.replace
+  v
+/data/media/movies/  →  Jellyfin librería "Películas" (movies)
 
 aMule (música)  ficheros .mp3/.flac/.ogg/.m4a terminados en /data/amule/incoming
   |  CronJob amule-music-organizer */29 * * * * (d): Python solo-stdlib embebido,
@@ -76,6 +85,7 @@ aMule (música)  ficheros .mp3/.flac/.ogg/.m4a terminados en /data/amule/incomin
     ApiKeys jellyfin-auto-scan (Job jellyfin-ensure-apikey con sqlite sobre
     jellyfin-config-local, INSERT OR IGNORE, espera a que jellyfin.db exista);
     si el Secret ya existe lo reutiliza, sin exponer el token en logs ni en git.
+(c) BaseItems en jellyfin.db y API /Items; ver Verificación.
 (d) CronJob amule-music-organizer (files/multimedia/amule-music-organizer.yaml):
     */29 * * * *, Forbid, activeDeadline 600, backoffLimit 0, imagen python:3.11-alpine,
     runAsUser 1000, readOnlyRootFilesystem true. Clasifica el audio suelto de
@@ -83,11 +93,28 @@ aMule (música)  ficheros .mp3/.flac/.ogg/.m4a terminados en /data/amule/incomin
     idempotente. Ignora los symlinks movies/tv de incoming (os.walk followlinks=False).
     Para lanzar una pasada sin esperar al schedule:
       kubectl -n multimedia create job --from=cronjob/amule-music-organizer organizer-manual
-(c) BaseItems en jellyfin.db y API /Items; ver Verificación.
+(e) CronJob amule-inbox-router (files/multimedia/amule-inbox-router.yaml), `verificado
+    2026-10-05`: */10 * * * *, Forbid, startingDeadline 300, activeDeadline 600,
+    backoffLimit 0, ttl 3600, imagen python:3.11-alpine, runAsUser/Group 1000,
+    fsGroup 1000, readOnlyRootFilesystem true, sin red y sin dependencias.
+    **Existe porque la WebUI de aMule deja las descargas terminadas en la RAÍZ de
+    IncomingDir** (su desplegable "Carpeta de destino" viene por defecto en ese valor) y
+    nada las movía: el escaneo automático funcionaba y aun así las películas eran invisibles.
+    Mueve a /data/media/movies todo vídeo suelto en la raíz y lo renombra a
+    "Título (Año).ext" (año entre paréntesis con prioridad; recorta en el primer paréntesis
+    y token a token contra ~150 términos técnicos; conserva los números de 1-2 dígitos del
+    título, porque hay sagas que acaban en número). Idempotente: si el destino existe con el
+    mismo tamaño lo salta, y con
+    tamaño distinto suffija "-2" sin sobrescribir. Ficheros de 0 bytes, ocultos, ".part",
+    subtítulos, imágenes y audio quedan fuera (el audio lo lleva (d)); un nombre no
+    interpretable se mueve tal cual, nunca se pierde. os.replace = rename dentro del
+    mismo NFS, instantáneo. Latencia total descarga→pantalla: 1-70 min.
+    Pasada inmediata: kubectl -n multimedia create job --from=cronjob/amule-inbox-router router-manual
+    Postmortem: incidentes/amule-peliculas-inbox-20261005.md
 ```
 
 - **qBittorrent (torrent)**: WebUI `https://torrent.elarreglador.eu` (LAN `192.168.1.58:8080`) login `elarreglador` (`/config/qBittorrent/qBittorrent.conf`). Subida `.torrent`/magnet con `savepath=/data/torrents/movies` (todo a `movies` por decisión operativa; si se categoriza `tv` va a `/data/torrents/tv → /data/media/tv`). `DefaultSavePath=/data/torrents` pero el Job garantiza que `/data/torrents/movies` y `/tv` son symlinks a `/data/media`. No hay wizard `*arr`.
-- **aMule (eDonkey/KAD)**: WebUI `https://amule.elarreglador.eu` (LAN `192.168.1.54:4711`) login `amule-secret` (`WEBUI_PWD`/`EC_PASSWORD` vía `AMULE_WEB_PWD`/`AMULE_EC_PWD` en `deploy-multimedia.sh`). `IncomingDir=/data/amule/incoming`, `TempDir=/data/amule/temp` (`amule.conf` o WebUI → Preferences). Mismo mecanismo de symlinks `.../incoming/movies → /data/media/movies` y `.../tv → /data/media/tv`; el Cron es común.
+- **aMule (eDonkey/KAD)**: WebUI `https://amule.elarreglador.eu` (LAN `192.168.1.54:4711`) login `amule-secret` (`WEBUI_PWD`/`EC_PASSWORD` vía `AMULE_WEB_PWD`/`AMULE_EC_PWD` en `deploy-multimedia.sh`). `IncomingDir=/data/amule/incoming`, `TempDir=/data/amule/temp` (`amule.conf` o WebUI → Preferences). **No hay que tocar la WebUI**: los ficheros terminados caen en la raíz de `IncomingDir` y el CronJob `amule-inbox-router` los enruta y renombra (`verificado 2026-10-05`). Elegir a mano `movies` en el desplegable *«Carpeta de destino»* también funciona (el router ignora los symlinks), pero es innecesario. El escaneo es el mismo `jellyfin-auto-scan` que para qBittorrent.
 - **Jellyfin**: `https://jellyfin.elarreglador.eu` (LAN `192.168.1.53:8096`), usuario `elarreglador` (admin), librerías `Películas` → `/data/media/movies`, `Series` → `/data/media/tv`, **`Música` → `/data/media/music`** y `Collections` (boxsets, en el propio config). Solo indexa `/data/media`. Las librerías las declara el Job `jellyfin-init-libraries` (`files/multimedia/jellyfin-libraries.yaml`) vía `POST /Library/VirtualFolders`: espera la API con el token del Secret, y si no hay ninguna librería sobre `/data/media/music` la crea; si ya existe, no hace nada (idempotente) y si el token es inválido **falla en voz alta**. `deploy-multimedia.sh` lo aplica tras el rollout de Jellyfin y tras `jellyfin-ensure-apikey`. **No editar `library.xml`**: Jellyfin ≥10.9 lo ignora y no existe tal fichero (verificado 2026-10-01).
 - **Retirados (2026-08-29)**: cadena automática `Jellyseerr → Sonarr/Radarr → Prowlarr → FlareSolverr + es-badge` eliminada. `scripts/_retirado/multimedia-wizard.sh`, `multimedia-language.sh`/`multimedia-verify.sh` y manifiestos `files/multimedia/_retirado/...` conservados por histórico. No hay indexadores ni búsqueda automática.
 
@@ -127,11 +154,21 @@ kubectl -n multimedia delete job jellyfin-init-libraries --ignore-not-found
 cat files/multimedia/jellyfin-libraries.yaml | kubectl apply -f -
 kubectl -n multimedia wait --for=condition=complete job/jellyfin-init-libraries --timeout=360s
 kubectl -n multimedia logs job/jellyfin-init-libraries
+
+# Vídeo: enrutado + renombrado aMule → /data/media/movies (sin esperar al schedule)
+kubectl -n multimedia create job --from=cronjob/amule-inbox-router router-manual
+kubectl -n multimedia wait --for=condition=complete job/router-manual --timeout=120s
+kubectl -n multimedia logs job/router-manual   # → MOVIDO: <release> -> Título (Año).ext
+kubectl -n multimedia exec deploy/amule -- du -sh /data/amule/incoming   # → 5.0K = inbox drenado
 ```
 
 Prueba de música (`verificado 2026-10-01`): `amule-music-organizer-manual-2` → `Complete 1/1 5s`, `MOVIDO: Elvis Presley - Jailhouse Rock.mp3 -> Elvis Presley/Unknown Album [tags]` y `MOVIDO: The Beatles - Yesterday.mp3 -> The Beatles/Unknown Album [filename]`, y `GET /Items?recursive=true&includeItemTypes=Audio,MusicAlbum,MusicArtist` → `6` ítems (`MusicArtist "Elvis Presley"`, `MusicArtist "The Beatles"`, `Audio "Jailhouse Rock"`, …). Detalle en `incidentes/jellyfin-musica-aMule-20261001.md`.
 
-Prueba con fichero dummy 5 MiB `TEST_Video_Libre_2026-08-31.avi` (cabecera válida copiada de avi existente) creado en `/data/torrents/movies` vía `qbittorrent` pod: `MovieCount 2→3` y `TotalRecordCount 1` tras el `POST /Library/Refresh`; tras `rm` y nuevo scan `Total 0, MovieCount 2`. La misma cadena aplica a aMule (`/data/amule/incoming/movies → /data/media/movies`).
+Prueba con fichero dummy 5 MiB `TEST_Video_Libre_2026-08-31.avi` (cabecera válida copiada de avi existente) creado en `/data/torrents/movies` vía `qbittorrent` pod: `MovieCount 2→3` y `TotalRecordCount 1` tras el `POST /Library/Refresh`; tras `rm` y nuevo scan `Total 0, MovieCount 2`.
+
+Prueba de vídeo (`verificado 2026-10-05`): `amule-inbox-router-manual-1` → `Complete 1/1 4s`, `Resumen: 6 movidos, 0 saltados, 0 errores`, las seis releases de eDonKey convertidas a `Título (Año).ext` (nombres omitidos por privacidad); `du -sh /data/amule/incoming` → `5.0K`; `GET /Items?…&IncludeItemTypes=Movie` devuelve las seis con póster, ficha y año de TMDB. Disparo natural `29853080` → `0 movidos, 0 saltados, 0 errores` (idempotencia). Detalle en `incidentes/amule-peliculas-inbox-20261005.md`.
+
+> **qBittorrent no necesita router.** qBittorrent escribe en `/data/torrents/movies`, que ya es un symlink a `/data/media/movies`, así que el fichero llega a la biblioteca sin ningún paso intermedio. El router de aMule existe únicamente porque `IncomingDir` **no** puede ser un symlink a la biblioteca sin romper la semántica de «descargas terminadas» de aMule.
 
 ### Estado y notas
 
@@ -139,7 +176,8 @@ Prueba con fichero dummy 5 MiB `TEST_Video_Libre_2026-08-31.avi` (cabecera váli
 - **qBittorrent**: login WebUI `forms` user `elarreglador` (configurado en `/config/qBittorrent/qBittorrent.conf`); `save_path=/data/torrents`, `temp_path` opcional. Backup en `/config`.
 - **aMule**: `amuled` + `amuleweb` (4711). Credenciales en Secret `amule-secret` (`WEBUI_PWD`/`EC_PASSWORD`) vía `AMULE_WEB_PWD`/`AMULE_EC_PWD` en `deploy-multimedia.sh` (nunca en repo). Config `amule.conf` en `/home/amule/.aMule`; `IncomingDir`/`TempDir` apuntan a `/data/amule/{incoming,temp}`. Retirados es-badge/Jellyseerr (ver `_retirado/`).
 - **Límites P2P para priorizar Jellyfin** (`verificado 2026-09-01`, fibra DIGI medida ~600 Mbit/s simétricos `01-Network.md#ancho-de-banda-y-límites-p2p-para-priorizar-multimedia`): **1/3 del ancho para P2P (200 Mbit/s), 2/3 libres (400 Mbit/s) para `jellyfin 192.168.1.53:8096`**. qBittorrent `19500 KiB/s down/up` (`19968000 B/s`, `Session\GlobalDLSpeedLimit=19500` modo 0, antes `5 KiB/s` modo 1 cerrado) y aMule `MaxDownload=4880 / MaxUpload=4880` (40 Mbit/s, antes `0` ilimitado). Total P2P 200 Mbit/s = 33% del total. Verificado `curl qbittorrent:8080/api/v2/transfer/info → 19968000` y `amule.conf → 4880` tras `rollout restart`.
-- **Jellyfin auto-scan**: `CronJob jellyfin-auto-scan` `0 * * * *` `Forbid` → `POST http://jellyfin:8096/Library/Refresh` con API key (`Secret jellyfin-apikey`, gitignored); garantizado de forma idempotente por `scripts/deploy-multimedia.sh:56` (genera `Secret` con `openssl rand -hex 16` si no existe y `Job jellyfin-ensure-apikey` con `sqlite` `INSERT OR IGNORE` sobre `jellyfin-config`). Verificado 2026-08-31 (`HTTP 204`, `MovieCount 2→3→2`, `TotalRecordCount 1→0`).
+- **Jellyfin auto-scan**: `CronJob jellyfin-auto-scan` `0 * * * *` `Forbid` → `POST http://jellyfin:8096/Library/Refresh` con API key (`Secret jellyfin-apikey`, gitignored); garantizado de forma idempotente por `scripts/deploy-multimedia.sh:69-142` (genera `Secret` con `openssl rand -hex 16` si no existe y `Job jellyfin-ensure-apikey` con `sqlite` `INSERT OR IGNORE` sobre `jellyfin-config`). Verificado 2026-08-31 (`HTTP 204`, `MovieCount 2→3→2`, `TotalRecordCount 1→0`).
+- **aMule: enrutado del inbox** (`verificado 2026-10-05`, `incidentes/amule-peliculas-inbox-20261005.md`): `CronJob amule-inbox-router` `*/10 * * * *` `Forbid` `runAsUser 1000` mueve el vídeo suelto de la raíz de `/data/amule/incoming` a `/data/media/movies` y lo renombra a `Título (Año).ext`; `CronJob amule-music-organizer` `*/29 * * * *` hace lo propio con el audio hacia `/data/media/music`. **Motivo**: la WebUI de aMule deja las descargas terminadas en `IncomingDir` (la raíz) porque su desplegable *«Carpeta de destino»* viene por defecto en ese valor, y nada las movía — el escaneo automático completaba con `HTTP 204` y aun así las películas eran invisibles. **Salud del pipeline**: `kubectl -n multimedia exec deploy/amule -- du -sh /data/amule/incoming` debe dar `5.0K`; si crece, el router ha dejado de funcionar aunque `jellyfin-auto-scan` siga en verde.
 - **qBittorrent P2P expuesto**: `TCP/UDP 6881` externo via DV0 → D1 → NodePort `31681` (ver [01-Network.md](./01-Network.md)). Cadena `scripts/multimedia-expose-torrent.sh` (stream nginx en DV0 + proxies LXC `proxytorrent`/`proxytorrentudp`). TCP+UDP verificados 2026-08-16 (`nc -zv 82.223.50.169 6881` OK, DHT `find_node` 297 B, `connection_status: connected`).
 - **aMule P2P expuesto**: `4662/TCP 4672/UDP 4665/UDP` externo via DV0 → D1 → NodePorts `31682-31684` (ver `scripts/amule-expose-p2p.sh`). Ingress WebUI `amule.elarreglador.eu` (4711) con login; P2P requiere `scripts/amule-expose-p2p.sh` (proxies LXC `proxyamule*` + `stream.conf.d/amule.conf`).
 

@@ -149,9 +149,14 @@ for app in qbittorrent jellyfin amule; do
 done
 
 echo
-echo "[3/5] Configurando CronJob amule-music-organizer (música aMule -> /data/media/music)..."
+echo "[3/5] Configurando CronJobs de organization aMule (música y vídeo)..."
 cat "$MM/amule-music-organizer.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
 echo "  CronJob amule-music-organizer aplicado (*/29 * * * *, Forbid, activeDeadline 600s)"
+cat "$MM/amule-inbox-router.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+echo "  CronJob amule-inbox-router aplicado (*/10 * * * *, Forbid, activeDeadline 600s)"
+echo "  (mueve el vídeo suelto de la raíz de /data/amule/incoming a /data/media/movies"
+echo "   y lo renombra a 'Título (Año).ext'; la WebUI de aMule deja las descargas en"
+echo "   IncomingDir por defecto, así que este CronJob es lo que las hace visibles)"
 
 echo
 echo "[4/5] Aplicando NetworkPolicies, Certificados e Ingress (jellyfin/qbittorrent/amule públicos)..."
@@ -201,9 +206,16 @@ echo "  curl -s -o /dev/null -w '%{http_code}' https://amule.elarreglador.eu/   
 echo "  kubectl -n $NS get certificate"
 echo "  kubectl -n $NS get cronjob"
 echo "  kubectl -n $NS logs job/amule-music-organizer-<ts>   # qué canciones se han movido"
+echo "  kubectl -n $NS logs job/amule-inbox-router-<ts>       # qué películas se han movido"
 echo
 echo "Notas:"
 echo "  - qBittorrent WebUI: subir .torrent/magnet por UI (login propio, no necesita wizard)"
 echo "  - aMule: WebUI en 4711, definir incoming=/data/amule/incoming temp=/data/amule/temp"
+echo "  - aMule deja las descargas TERMINADAS en la RAÍZ de incoming. El CronJob"
+echo "    amule-inbox-router las mueve a /data/media/movies y las renombra a 'Título (Año)';"
+echo "    jellyfin-auto-scan las indexa en el siguiente refresh horario. Latencia 1-70 min."
+echo "  - Si prefieres que el gestor escriba directamente en la subcarpeta, elige 'movies'"
+echo "    en el desplegable 'Carpeta de destino' de la WebUI: el router lo detecta y no"
+echo "    hace nada (followlinks=False), pero no lo hagas: basta con el valor por defecto."
 echo "  - IPs liberadas: 192.168.1.54 (ahora amule), .55 (ahora amule-p2p), .56/.57 libres"
 echo "Los detalles viven en 03-Aplicaciones.md."
