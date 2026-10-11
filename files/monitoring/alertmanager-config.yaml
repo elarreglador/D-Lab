@@ -18,11 +18,11 @@ alertmanager.yaml: |
     group_interval: 10m
     repeat_interval: 12h
     routes:
-      # Ruta prioritaria: alertas útiles de D-Lab (PrometheusRule alertas-personalizadas)
-      # HostDown, ClusterNodeNotReady, DiskPressureHost, CertificateExpiring
+      # Ruta prioritaria: alertas útiles de D-Lab (PrometheusRule alertas-personalizadas + adguard)
+      # HostDown, ClusterNodeNotReady, DiskPressureHost, CertificateExpiring, AdguardDown
       - receiver: telegram
         matchers:
-          - alertname =~ "HostDown|ClusterNodeNotReady|DiskPressureHost|CertificateExpiring"
+          - alertname =~ "HostDown|ClusterNodeNotReady|DiskPressureHost|CertificateExpiring|AdguardDown"
         group_wait: 30s
         group_interval: 5m
         repeat_interval: 6h

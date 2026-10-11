@@ -1696,6 +1696,23 @@ etcd es la base de datos del cluster Kubernetes. Es un almacén **clave-valor** 
 
 ---
 
+### Fase 15 | DNS de la LAN con AdGuard Home (filtrado de anuncios)
+
+**Objetivo**: dotar a toda la LAN (`192.168.1.0/24`) de un resolutor DNS que filtre anuncios y rastreadores, administrable desde un panel web propio. Spec: [specs/01-adguard-home.md](./specs/01-adguard-home.md).
+
+**Estado**: infraestructura desplegada y **verificada el 2026-10-11**; cutover del router y de G9 pendiente (pasos 7–9 de la spec, requieren al humano).
+
+- **Workload**: `adguard` en namespace `adguard` (`files/adguard/`). Imagen `adguard/adguardhome:v0.107.79` (último estable; CMD `--no-check-update -c /opt/adguardhome/work/AdGuardHome.yaml -w /opt/adguardhome/work`), 1 réplica `Recreate`, nodeSelector `eu.elarreglador/worker=true`. Config+datos en el PVC `adguard-data` (2Gi, RWO, `nfs-storage-v4`) montado en `/opt/adguardhome/work` (AdGuardHome.yaml, `sessions.db`, `querylog.json`).
+- **Red**: Service `adguard-dns` LoadBalancer **`192.168.1.61`** (`externalTrafficPolicy: Local`, 53/UDP+TCP). Es la última IP libre del pool MetalLB (`.50–.64`; ocupadas `.50–.60`). Service `adguard-web` ClusterIP 3000. Ingress `https://adguard.elarreglador.eu` (cert-manager + force-ssl-redirect).
+- **Filtrado**: upstream `8.8.8.8`/`8.8.4.4`; bloqueo vía filtro integrado AdGuard DNS filter → `0.0.0.0`. Config sembrada por el Job `adguard-seed-config` (generada por el propio binario, `schema_version 34`, validada con `--check-config`; idempotente).
+- **Seguridad**: login propio del panel (user `elarreglador`, hash bcrypt del Secret `adguard-web`, **por stdin**, gitignored); NetworkPolicy `adguard` (ingress 53 desde `192.168.1.0/24`, 3000 solo desde ingress-nginx; egress 8.8.8.8/8.8.4.4:53 + 443 saliente para listas).
+- **Alerta**: PrometheusRule `AdguardDown` → Alertmanager → Telegram. Verificado: scale a 0 dispara FIRING ~60 s y `POST /alert 200`.
+- **Despliegue**: `ADGUARD_USER=… ADGUARD_PASSWORD_HASH=… ./scripts/deploy-adguard.sh` (idempotente, dry-run=server, Secret por stdin). **Gotchas**: aplicar los YAML **por fichero** (concatenar sin `---` se salta el primer documento) y validar manifiestos solo con `kubectl apply --dry-run=server`.
+- **Verificación** `(verificado 2026-10-11)`: `dig @192.168.1.61 elarreglador.eu` → `82.223.50.169`; `dig @192.168.1.61 doubleclick.net` → `0.0.0.0`; `curl -sI https://adguard.elarreglador.eu` → `302`; script re-ejecutado dos veces (2º run: `unchanged`, exit 0, sin reinicio de pod).
+- **Runbook y cutover** (router y G9): [04-Operaciones.md](./04-Operaciones.md#especificación-01-adguard-home—runbook-de-rescate-y-cutover).
+
+---
+
 ## Estado del Proyecto
 
 ### Completado ✅

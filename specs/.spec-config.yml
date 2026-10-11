@@ -1,0 +1,6 @@
+# especificación de la configuración del flujo de trabajo
+#
+# AutoCreateBranch: controla si /spec-impl crea la rama git automáticamente.
+# true (predeterminado) → /spec-impl crea y cambia a spec-NN-slug sin preguntar
+# false → /spec-impl solicita confirmación [y/N] antes de crear la rama
+AutoCreateBranch: true

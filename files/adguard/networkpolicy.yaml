@@ -1,0 +1,52 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: adguard
+  namespace: adguard
+spec:
+  podSelector:
+    matchLabels:
+      app: adguard
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # DNS desde la LAN (source IP preservada por externalTrafficPolicy: Local)
+    - from:
+        - ipBlock:
+            cidr: 192.168.1.0/24
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Panel de administración desde ingress-nginx
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3000
+  egress:
+    # Upstream DNS (8.8.8.8 / 8.8.4.4)
+    - to:
+        - ipBlock:
+            cidr: 8.8.8.8/32
+        - ipBlock:
+            cidr: 8.8.4.4/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Actualización de listas de bloqueo (HTTPS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443

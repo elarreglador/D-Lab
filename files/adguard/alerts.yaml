@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: adguard-alertas
+  namespace: adguard
+  labels:
+    app: adguard
+    # Necesario para que el Prometheus de kube-prometheus-stack lo seleccione
+    # (spec.ruleSelector = matchLabels release=kube-prometheus-stack).
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: adguard
+      rules:
+        - alert: AdguardDown
+          expr: kube_deployment_status_replicas_available{namespace="adguard",deployment="adguard"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "AdGuard Home sin réplicas disponibles — el DNS de la LAN (192.168.1.61) está caído"

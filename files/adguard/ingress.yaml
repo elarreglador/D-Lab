@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: adguard
+  namespace: adguard
+  annotations:
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: adguard.elarreglador.eu
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: adguard-web
+                port:
+                  number: 3000
+  tls:
+    - hosts:
+        - adguard.elarreglador.eu
+      secretName: adguard-elarreglador-eu-tls

@@ -187,6 +187,58 @@ ssh D1 "lxc exec k8s-worker-1 -- ip -4 addr show eth0 | grep 192.168.1.30"   # V
 
 ---
 
+## Especificación 01 — AdGuard Home: runbook de rescate y cutover
+
+AdGuard Home resuelve el DNS de la LAN en `192.168.1.61` (namespace `adguard`, spec [01](./specs/01-adguard-home.md)). Hasta que el router apunte a él, **nadie depende de AdGuard**; tras el cutover, el runbook siguiente es la ruta de vuelta si el DNS de la LAN colapsa.
+
+### Verificación rápida (post-despliegue o post-arranque)
+
+| Check | Comando | Esperado |
+|-------|---------|----------|
+| Pod | `ssh server "kubectl -n adguard get pods"` | `adguard-*` `1/1 Running`; `adguard-seed-config-*` `Completed` |
+| PVC | `ssh server "kubectl -n adguard get pvc"` | `adguard-data` `Bound` |
+| Resolución | `dig +short @192.168.1.61 elarreglador.eu` | `82.223.50.169` |
+| Bloqueo | `dig +short @192.168.1.61 doubleclick.net` | `0.0.0.0` |
+| Panel | `curl -s -o /dev/null -w '%{http_code}' https://adguard.elarreglador.eu/login.html` | `200` |
+| Alerta | Alertmanager → Telegram | solo `AdguardDown` si el pod no está `Running` |
+
+### Cutover del router (paso 8 de la spec — requiere acceso a la web del router)
+
+Router: **H3600P V9.0** (interfaz ZTE, firmware `V9.0.0P5_DIGI`). Login `http://192.168.1.1/` (solo alcanzable desde la LAN; DV0/G9 no llegan por WireGuard). Credenciales de administración en `info_sensible/router.env` (gitignored).
+
+> **Previo**: probar aquí mismo la Vía A de rescate (hotspot + `ssh server "kubectl -n adguard get pods"`) **antes** de tocar el router. `(verificado 2026-10-11`)`
+
+Configuración objetivo y **estado actual `(verificado 2026-10-11)`**:
+1. **Red local → LAN → IPv4 → «Servidor DHCP»**: `Servidor DHCP: Activado`; **`ISP DNS: Desactivado`**; **DNS principal `192.168.1.61`**; **DNS secundario `0.0.0.0`** (vacío — no mezclar con 8.8.8.8: un fallo de AdGuard ocultaría el problema).
+2. **Red local → LAN → IPv6**: **`Servidor DHCPv6: Desactivado`** y **`Servicio RA: Desactivado`** (cierra el bypass de DNS IPv6: el router ya no anuncia DNS v6 por RA/DHCPv6; los clientes conservan IPv4).
+3. Aplicar y **renovar la concesión del cliente** (modo avión/WiFi off/on). Verificación: ajustes WiFi → DNS `192.168.1.61`; en el móvil `elarreglador.eu` resuelve y los anuncios no cargan; si falla → **Vía A de rescate** (abajo).
+4. Sweep de equipos: al renovar el DHCP dejan de recibir el DNS del ISP. Inspeccionar `Query Log` del panel de AdGuard para confirmar clientes.
+
+### Cutover de G9 (paso 9 — el último)
+
+```bash
+nmcli connection modify DIGIFIBRA-PLUS-eQeY ipv4.dns 192.168.1.61 ipv4.ignore-auto-dns yes ipv6.method disabled
+nmcli connection up DIGIFIBRA-PLUS-eQeY
+dig elarreglador.eu          # → 82.223.50.169
+dig doubleclick.net          # → 0.0.0.0
+```
+
+Tras este paso, **el portátil del señor (y el agente que corre en él) deja de resolver por 8.8.8.8** y depende de AdGuard: si la LAN se rompe, la Vía A de rescate requiere pasar el DNS del ordenador a otro dispositivo del hotspot (o a 8.8.8.8 vía nmcli, con acceso físico a la LAN).
+
+### Runbook de rescate
+
+- **Vía A — DNS LAN caído pero cluster operativo** (prioridad): el IP local del host sigue libre →
+  1. Móvil → **hotspot** (compartir datos; el ordenador se conecta al WiFi del móvil, no al router).
+  2. `mkdir -p ~/.ssh && ssh server "kubectl -n adguard get pods"` (kubeconfig local; el nombre `server` vive en `~/.ssh/config` del SEÑOR).
+     - Si el cluster está caído, la prioridad es **arrancarlo** (`./scripts/D-lab_start.sh` desde el repo local) y re-verificar; AdGuard vuela con el cluster (pods en workers + PVC NFS + VIP Ganesha).
+  3. Si el pod está `Running` pero el DNS no responde: `ssh server "kubectl -n adguard logs deploy/adguard --tail=50"`; si `AdGuardHome.yaml` quedó corrupto, restaurar desde Git (`files/adguard/seed-config.yaml`) con `./scripts/deploy-adguard.sh`.
+- **Vía B — router inaccesible / se quiere volver atrás** (el señor, con acceso al ordenador):
+  - Solo G9: `nmcli connection modify DIGIFIBRA-PLUS-eQeY ipv4.dns "8.8.8.8,1.1.1.1" ipv4.ignore-auto-dns no` y `nmcli connection up DIGIFIBRA-PLUS-eQeY`.
+  - El resto de la LAN: el router vuelve a su DNS defecto si se dejan los campos secundarios/primarios como estaban; AdGuard deja de ser crítico (no obstante, **no desplegar a la inversa**: la VIP `.61` solo la usa AdGuard).
+- **Escape definitivo**: `ssh server "kubectl -n adguard scale deploy/adguard --replicas=0"` y luego el router a su DNS original → `dig elarreglador.eu` desde la LAN recupera `82.223.50.169`. La alerta `AdguardDown` se disparará en ~2 min (responder a Telegram, no desatender).
+
+---
+
 ## Verificación post-arranque
 
 | Check | Comando | Esperado |
@@ -199,6 +251,7 @@ ssh D1 "lxc exec k8s-worker-1 -- ip -4 addr show eth0 | grep 192.168.1.30"   # V
 | Landing | `curl -s -o /dev/null -w '%{http_code}' https://elarreglador.eu` | `200` |
 | Grafana | ídem `https://grafana.elarreglador.eu` | `200` (página de login) |
 | Node-RED | ídem `https://nodered.elarreglador.eu` | `200` (página de login) |
+| AdGuard | `ssh server "kubectl -n adguard get pods"` + `dig @192.168.1.61 elarreglador.eu` | pod `Running` y DNS responde (si el cutover ya está hecho) |
 | WireGuard hosts | `systemctl is-active wg-quick@wg0` en D1/D2 | `active` (split-tunnel se regenera en cada boot) |
 | Alertas | Grafana | solo las de diseño |
 
@@ -213,6 +266,7 @@ ssh D1 "lxc exec k8s-worker-1 -- ip -4 addr show eth0 | grep 192.168.1.30"   # V
 | Nodo `NotReady` por kubelet en LXC (`/proc/sys`, kmsg) | Baja (config persistida) | Aplicar el troubleshooting de K8s en LXC de README-TECH.md. |
 | PDB bloqueando evictions | n/a | No se usa `drain` en apagado total. Para mantenimiento de **un solo** nodo, ver nota de PDBs en [03-Aplicaciones.md](./03-Aplicaciones.md). |
 | Ruteo WireGuard roto tras boot | Baja (split-tunnel) | El arranque automático espera `wg-quick@wg0` activo en D1/D2 antes de levantar los contenedores. Si hay bucles de ruteo, seguir [01-Network.md](./01-Network.md#wireguard-estabilidad-y-split-tunnel). |
+| **DNS LAN caído tras el cutover de AdGuard** | Media (depende del cluster) | Alerta `AdguardDown` → Telegram; si es cluster caído, `D-lab_start.sh`; si es solo DNS, runbook de la especificación 01 (Vía A hotspot o Vía B nmcli 8.8.8.8). **Probar la Vía A antes de tocar el router.** |
 | Corte de luz durante el proceso | Baja (SAI) | El SAI cubre micro-cortes. Apagar siempre con `poweroff`, nunca con el botón. |
 
 ---
