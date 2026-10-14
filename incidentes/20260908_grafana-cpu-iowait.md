@@ -26,7 +26,7 @@ En Linux `idle` es CPU sin trabajo, `iowait` es CPU ociosa esperando IO. La fór
 * Host D2 `uptime` `load 12.16` `pressure io some 99.49% full 79.68%` `vmstat wa 89% b 10` `dmesg: task du:974319 blocked for 122s. folio_wait_writeback` ; `sda %util 0.008` (disco ocioso)
 * `ps D` `folio_wait_bit_common → filemap_write_and_wait_range → nfs_getattr` sobre `/data/media/movies` (PVC `media-data` `VIP 192.168.1.30` Gluster replica 2 HDD `fsync ~66ms` `README-TECH.md:1045`, ambos bricks `97%` `421G/458G`, `Committed_AS 10.3G > CommitLimit 7.9G`). Pods en `k8s-worker-2` (`qbittorrent`, `amule`, `jellyfin-auto-scan`) ensucian páginas vía NFS; `ls/du` hacen `stat` y bloquean en `writeback` hasta que Gluster confirme ambas réplicas. `hostNetwork:true` del DaemonSet hace que los 3 paneles de D2 lean el mismo kernel host, de ahí el 100% triple.
 
-No es bug de scrape (`up{host="d2"} 1`, `InternalIP 192.168.1.22/.32` correcto tras fix `incidentes/grafana-sin-datos-d2-mapeo-ip.md`), sino semántica.
+No es bug de scrape (`up{host="d2"} 1`, `InternalIP 192.168.1.22/.32` correcto tras fix `incidentes/20260908_grafana-sin-datos-d2-mapeo-ip.md`), sino semántica.
 
 ## Solución Implementada
 

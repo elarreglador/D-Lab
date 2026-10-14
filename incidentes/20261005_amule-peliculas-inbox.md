@@ -41,7 +41,7 @@ muestra el symlink `movies`, lo que refuerza la ilusión de que es la ruta usada
 La cadena de música **sí** tenía su paso de movimiento: `amule-music-organizer`
 (`*/29 * * * *`) recoge el audio suelto de la raíz de `incoming` y lo clasifica en
 `Artista/Álbum` dentro de `/data/media/music`. Ese CronJob nació del incidente
-`jellyfin-musica-aMule-20261001` (2026-10-01).
+`20261001_jellyfin-musica-aMule` (2026-10-01).
 
 Para vídeo no había nada equivalente. Ningún `kubectl apply`, ningún script, ningún
 manifiesto movía ficheros de la raíz. La única operación era `/Library/Refresh`,
@@ -226,4 +226,4 @@ que ahora sería de biblioteca. El router mantiene una frontera limpia entre *in
   `amule.yaml`, `init-media-dirs.yaml`, `jellyfin-auto-scan.yaml`, `networkpolicy-multimedia.yaml`
 * `scripts/deploy-multimedia.sh`
 * `03-Aplicaciones.md` § Flujo automático descarga → catálogo
-* `incidentes/jellyfin-musica-aMule-20261001.md` (el mismo hueco, del lado del audio)
+* `incidentes/20261001_jellyfin-musica-aMule.md` (el mismo hueco, del lado del audio)

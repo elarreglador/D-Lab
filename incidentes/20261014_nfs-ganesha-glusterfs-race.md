@@ -223,4 +223,4 @@ lxc exec k8s-worker-1 -- showmount -e 192.168.1.30
 - `04-Operaciones.md` — Procedimiento arranque/parada + `D-lab_start.sh`
 - `README-TECH.md` Fase 8 — Arquitectura GlusterFS + NFS-Ganesha + Keepalived
 - `files/adguard/adguard.yaml` — Deployment AdGuard con PVC `adguard-data`
-- `incidentes/jellyfin-lentitud-20260906.md` — Race condition similar (NFS/GlusterFS + SQLite)
+- `incidentes/20260906_jellyfin-lentitud.md` — Race condition similar (NFS/GlusterFS + SQLite)
