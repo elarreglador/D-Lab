@@ -19,6 +19,12 @@ spec:
     spec:
       securityContext:
         fsGroup: 1000
+        # Grupo video (gid 44) para acceder a /dev/dri/renderD128 (VAAPI).
+        # El dispositivo LXD "gpu gid=44" se añade a k8s-worker-1 y k8s-worker-2
+        # (scripts/jellyfin-gpu-passthrough.sh, o a mano desde cualquier
+        # miembro del cluster LXD).
+        supplementalGroups:
+          - 44
       nodeSelector:
         eu.elarreglador/worker: "true"
       containers:
@@ -40,6 +46,11 @@ spec:
             limits:
               cpu: 1500m
               memory: 3Gi
+              # GPU Intel HD 630 expuesta por intel-gpu-plugin (DaemonSet en
+              # kube-system). El device node lo inyecta el plugin, así que el
+              # pod no necesita hostPath ni privileged. Ver
+              # files/multimedia/intel-gpu-plugin.yaml.
+              gpu.intel.com/i915: 1
           startupProbe:
             httpGet:
               path: /
@@ -110,9 +121,11 @@ spec:
         - name: config
           persistentVolumeClaim:
             claimName: jellyfin-config-local
+        # 10Gi: un HLS completo de 1h41m a 9 Mbps son ~7 GiB. Con 1Gi, kubelet
+        # desalojaba el pod a mitad de película.
         - name: cache
           emptyDir:
-            sizeLimit: 1Gi
+            sizeLimit: 10Gi
         - name: backup
           persistentVolumeClaim:
             claimName: media-data

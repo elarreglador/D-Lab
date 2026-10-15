@@ -1,0 +1,102 @@
+# Intel GPU device plugin (intel-device-plugins-for-kubernetes v0.37.1).
+#
+# Expone la GPU integrada Intel HD 630 de los workers al cluster como recurso
+# `gpu.intel.com/i915`, para que el pod de Jellyfin pueda transcodificar por
+# hardware (VAAPI) SIN ser privileged y SIN usar volúmenes hostPath.
+#
+# Por qué un device plugin y no un hostPath en el pod de Jellyfin:
+#   - el namespace `multimedia` está en PodSecurity `baseline`, que prohíbe
+#     hostPath; y además runc deniega la apertura de un char device arbitrario
+#     (`Operation not permitted`) salvo en contenedores privileged;
+#   - con un device plugin el privilegio queda en este DaemonSet interno de
+#     `kube-system`, no en el contenedor de Jellyfin, que está expuesto a
+#     Internet (`jellyfin.elarreglador.eu`).
+#
+# Requisitos previos en los contenedores LXC de los workers (una sola vez,
+# idempotente; ver scripts/jellyfin-gpu-passthrough.sh):
+#   lxc config device add k8s-worker-N gpu   gpu   gid=44            # /dev/dri
+#   lxc config device add k8s-worker-N sysdrm disk source=/sys/class/drm \
+#       path=/sys/class/drm readonly=true                           # sysfs
+#
+# Uso:
+#   cat files/multimedia/intel-gpu-plugin.yaml | ssh server "kubectl apply -f -"
+#   ssh server "kubectl get nodes -o json | grep gpu.intel.com"     # Allocatable
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: intel-gpu-plugin
+  namespace: kube-system
+  labels:
+    app: intel-gpu-plugin
+    app.kubernetes.io/part-of: multimedia
+spec:
+  selector:
+    matchLabels:
+      app: intel-gpu-plugin
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: intel-gpu-plugin
+    spec:
+      automountServiceAccountToken: false
+      # Solo los workers tienen GPU; los masters tienen taint control-plane.
+      nodeSelector:
+        eu.elarreglador/worker: "true"
+      containers:
+        - name: intel-gpu-plugin
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          image: intel/intel-gpu-plugin:0.37.1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              memory: "45Mi"
+              cpu: 40m
+            limits:
+              memory: "115Mi"
+              cpu: 100m
+          volumeMounts:
+            - name: devfs
+              mountPath: /dev/dri
+              readOnly: true
+            - name: sysfsdrm
+              mountPath: /sys/class/drm
+              readOnly: true
+            - name: kubeletsockets
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: cdipath
+              mountPath: /var/run/cdi
+      volumes:
+        - name: devfs
+          hostPath:
+            path: /dev/dri
+        - name: sysfsdrm
+          hostPath:
+            path: /sys/class/drm
+        - name: kubeletsockets
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: cdipath
+          hostPath:
+            path: /var/run/cdi
+            type: DirectoryOrCreate

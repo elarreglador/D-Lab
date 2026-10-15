@@ -195,6 +195,29 @@ else
 fi
 
 echo
+echo "[5/5] Activando aceleración por hardware VAAPI para Jellyfin (SPEC 02)..."
+# El DaemonSet vive en kube-system y publica el recurso gpu.intel.com/i915.
+# El Job habla con la API de Jellyfin como administrador y escribe EncodingOptions
+# en jellyfin.db; verifica contra /config/encoding.xml porque el GET
+# /System/Configuration no devuelve esa sección en Jellyfin 12.
+if [ -f "$MM/intel-gpu-plugin.yaml" ]; then
+  cat "$MM/intel-gpu-plugin.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+  ssh "$KUBECTL_HOST" "kubectl -n kube-system rollout status ds/intel-gpu-plugin --timeout=180s" || \
+    echo "  AVISO: el device plugin no está listo (¿faltan los devices LXD? lanza scripts/jellyfin-gpu-passthrough.sh)"
+fi
+if [ -f "$MM/jellyfin-vaapi.yaml" ]; then
+  ssh "$KUBECTL_HOST" "kubectl -n multimedia delete job jellyfin-vaapi --ignore-not-found >/dev/null 2>&1 || true"
+  cat "$MM/jellyfin-vaapi.yaml" | ssh "$KUBECTL_HOST" "kubectl apply -f -"
+  if ssh "$KUBECTL_HOST" "kubectl -n multimedia wait --for=condition=complete job/jellyfin-vaapi --timeout=180s" 2>/dev/null; then
+    ssh "$KUBECTL_HOST" "kubectl -n multimedia logs job/jellyfin-vaapi" 2>&1 | grep -v -i token | tail -4
+  else
+    echo "  AVISO: jellyfin-vaapi no completó; revisa 'kubectl -n multimedia logs job/jellyfin-vaapi'"
+  fi
+fi
+echo "  Requisito LXC (una sola vez, idempotente): ./scripts/jellyfin-gpu-passthrough.sh"
+echo "  añade el device GPU a k8s-worker-1 y k8s-worker-2 y monta /sys/class/drm."
+
+echo
 echo "OK: stack multimedia simplificado desplegado en el namespace '$NS'"
 echo
 echo "Verificación sugerida:"
